@@ -32,7 +32,8 @@ def create_user(request):
     try:
         # Parse the incoming JSON request body
         data = json.loads(request.body)
-        emails = data.get("data", [])
+        emails = data.get("emails", [])
+        print(emails)
         business_name = data.get("business_name")
         password = data.get("password")
 
@@ -46,6 +47,7 @@ def create_user(request):
         # Check if the user already exists
         existing_user = users_collection.find_one({"business_name": business_name})
         if existing_user:
+            print("Name taken")
             return JsonResponse(
                 {"warning": "Business name already taken"},
                 status=200
@@ -65,7 +67,7 @@ def create_user(request):
 
         if result.inserted_id:
             return JsonResponse(
-                {"message": "User added successfully", "id": str(result.inserted_id)},
+                {"success": "User added successfully", "id": str(result.inserted_id)},
                 status=200
             )
         else:
