@@ -21,9 +21,7 @@ client = MongoClient(f'{settings.MONGO_URI}')
 db = client['Limeblock']
 users_collection = db['Users']
 frontend_collection = db['Frontend']
-frontend_endpoints_collection = db['Frontend_Endpoints']
 backend_collection = db['Backend']
-backend_endpoints_collection = db['Backend_Endpoints']
 
 @csrf_exempt
 def main(req):
@@ -268,6 +266,9 @@ def update_frontend(request):
             
         if "url" in data:
             update_data["url"] = data["url"]
+
+        if "folders" in data:
+            update_data["folders"] = data["folders"]
             
         # If nothing to update, return success
         if not update_data:
