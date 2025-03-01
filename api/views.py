@@ -374,3 +374,161 @@ def frontend_details(request):
             status=500
         )
     
+
+@csrf_exempt
+def update_backend(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+
+        # Validate the request data
+        if not user_id:
+            return JsonResponse(
+                {"message": "Invalid payload: Missing user_id"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user in the database
+        user = users_collection.find_one({"_id": object_id})
+        
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        # Get the backend document ID
+        backend_id = user.get("backend")
+        if not backend_id:
+            return JsonResponse(
+                {"warning": "Backend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            backend_object_id = ObjectId(backend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid backend ID format"},
+                status=400
+            )
+            
+        # Prepare update data
+        update_data = {}
+        
+        # Check for URL and folders parameters
+        if "url" in data:
+            update_data["url"] = data["url"]
+
+        if "folders" in data:
+            update_data["folders"] = data["folders"]
+            
+        # If nothing to update, return success
+        if not update_data:
+            return JsonResponse(
+                {"success": True, "message": "No updates provided"},
+                status=200
+            )
+            
+        # Update the backend document
+        result = backend_collection.update_one(
+            {"_id": backend_object_id},
+            {"$set": update_data}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse(
+                {"success": True, "message": "Backend updated successfully"},
+                status=200
+            )
+        else:
+            return JsonResponse(
+                {"success": True, "message": "No changes made to backend"},
+                status=200
+            )
+    
+    except Exception as error:
+        print("Error updating backend:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+    
+
+@csrf_exempt
+def backend_details(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+
+        # Validate the request data
+        if not user_id:
+            return JsonResponse(
+                {"message": "Invalid payload: Missing user_id"},
+                status=400
+            )
+        
+        user_object_id = ObjectId(user_id)
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+        
+        backend_id = user.get("backend")
+        if not backend_id:
+            return JsonResponse(
+                {"warning": "No backend configuration associated with this user"},
+                status=404
+            )
+
+        # Convert backend_id to ObjectId for MongoDB query
+        try:
+            backend_object_id = ObjectId(backend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid backend ID format"},
+                status=400
+            )
+            
+        # Get the backend document
+        backend = backend_collection.find_one({"_id": backend_object_id})
+        
+        if backend:
+            # Convert ObjectId to string for JSON serialization
+            backend['_id'] = str(backend['_id'])
+            backend['user_id'] = str(backend['user_id'])
+            
+            return JsonResponse({
+                "success": True,
+                "backend": {
+                    "id": backend['_id'],
+                    "user_id": backend['user_id'],
+                    "url": backend.get('url', ""),
+                    "folders": backend.get('folders', [])
+                }
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"warning": "Backend configuration not found"},
+                status=404
+            )
+
+    except Exception as error:
+        print("Error fetching backend details:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
