@@ -16,6 +16,8 @@ import re
 import requests
 import stripe
 import pandas as pd
+import random
+import string
 
 client = MongoClient(f'{settings.MONGO_URI}')
 db = client['Limeblock']
@@ -53,6 +55,9 @@ def create_user(request):
                 status=200
             )
 
+        # Generate API key that starts with lime_
+        api_key = "lime_" + ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+
         # Prepare user data to insert
         user_data = {
             "business_name": business_name,
@@ -60,6 +65,7 @@ def create_user(request):
             "emails": emails,
             "created_at": datetime.datetime.today(),
             "plan": "free",
+            "api_key": api_key,
         }
 
         # Insert the user into the Users collection
@@ -74,12 +80,14 @@ def create_user(request):
                 "context_params": [],
                 "url": "",
                 "folders": [],
+                "api_key": api_key,
             }
 
             backend = {
                 "user_id": str(result.inserted_id),
                 "url": "",
                 "folders": [],
+                "api_key": api_key,
             }
 
             frontend_result = frontend_collection.insert_one(frontend)
@@ -184,6 +192,7 @@ def user_details(request):
                     "created_at": user.get('created_at').isoformat() if user.get('created_at') else None,
                     "frontend": user.get('frontend'),
                     "backend": user.get('backend'),
+                    "api_key": user.get('api_key'),
                 }
             }, status=200)
         else:
@@ -358,7 +367,8 @@ def frontend_details(request):
                     "size": frontend.get('size', 12),
                     "context_params": frontend.get('context_params', []),
                     "url": frontend.get('url', ""),
-                    "folders": frontend.get('folders', [])
+                    "folders": frontend.get('folders', []),
+                    "api_key": frontend.get('api_key'),
                 }
             }, status=200)
         else:
@@ -517,7 +527,8 @@ def backend_details(request):
                     "id": backend['_id'],
                     "user_id": backend['user_id'],
                     "url": backend.get('url', ""),
-                    "folders": backend.get('folders', [])
+                    "folders": backend.get('folders', []),
+                    "api_key": backend.get('api_key'),
                 }
             }, status=200)
         else:
