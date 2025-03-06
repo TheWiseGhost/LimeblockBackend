@@ -62,3 +62,6 @@ ENV.bak/
 
 # pytest
 .cache/
+
+# Langchain added them
+/node_modules

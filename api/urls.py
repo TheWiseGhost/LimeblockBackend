@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import main, create_user, sign_in, user_details, update_frontend, frontend_details, update_backend, backend_details
+from .views import main, create_user, sign_in, user_details, update_frontend, frontend_details, update_backend, backend_details, process_prompt
 
 urlpatterns = [
     path('', main, name='main'),
@@ -10,5 +10,6 @@ urlpatterns = [
     path('frontend_details/', frontend_details, name='frontend_details'),
     path('update_backend/', update_backend, name='update_backend'),
     path('backend_details/', backend_details, name='backend_details'),
+    path('process_prompt/', process_prompt, name='process_prompt'),
 ]
 
