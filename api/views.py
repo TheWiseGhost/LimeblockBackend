@@ -982,3 +982,54 @@ def process_prompt(request):
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
+    
+
+
+@csrf_exempt
+def public_frontend_details(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        api_key = data.get("api_key")
+
+        # Validate the request data
+        if not api_key:
+            return JsonResponse(
+                {"message": "Invalid payload: Missing api_key"},
+                status=400
+            )
+            
+        # Get the frontend document
+        frontend = frontend_collection.find_one({"api_key": api_key})
+        
+        if frontend:
+            # Convert ObjectId to string for JSON serialization
+            frontend['_id'] = str(frontend['_id'])
+            frontend['user_id'] = str(frontend['user_id'])
+            
+            return JsonResponse({
+                "success": True,
+                "frontend": {
+                    "id": frontend['_id'],
+                    "user_id": frontend['user_id'],
+                    "body": frontend.get('body', "#90F08C"),
+                    "eyes": frontend.get('eyes', "#FFFFFF"),
+                    "size": frontend.get('size', 12),
+                    "context_params": frontend.get('context_params', []),
+                    "url": frontend.get('url', ""),
+                    "folders": frontend.get('folders', []),
+                    "api_key": frontend.get('api_key'),
+                }
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found"},
+                status=404
+            )
+
+    except Exception as error:
+        print("Error fetching frontend details:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
