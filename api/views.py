@@ -553,8 +553,6 @@ def backend_details(request):
         )
     
 
-
-# Testing out langchain
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
     reason: str = Field(description="Reason for selecting this endpoint")
@@ -631,44 +629,79 @@ class EndpointAgent:
         if not user:
             return {"error": "User not found", "status": 404}
         
-        # Get the backend document ID
+        # Get the backend and frontend document IDs
         backend_id = user.get("backend")
-        if not backend_id:
-            return {"error": "Backend configuration not found for this user", "status": 404}
+        frontend_id = user.get("frontend")
         
-        # Step 2: Retrieve the backend configuration
-        backend_config = self.backend_collection.find_one({"_id": ObjectId(backend_id)})
-        if not backend_config:
-            return {"error": "Backend configuration document not found", "status": 404}
+        if not backend_id and not frontend_id:
+            return {"error": "No configuration found for this user", "status": 404}
         
-        # Step 3: Find the best matching endpoint
-        endpoints = self._get_all_endpoints(backend_config)
-        if not endpoints:
+        # Step 2: Retrieve the backend and frontend configurations
+        backend_config = None
+        frontend_config = None
+        
+        if backend_id:
+            backend_config = self.backend_collection.find_one({"_id": ObjectId(backend_id)})
+        
+        if frontend_id:
+            frontend_config = self.frontend_collection.find_one({"_id": ObjectId(frontend_id)})
+        
+        if not backend_config and not frontend_config:
+            return {"error": "Configuration documents not found", "status": 404}
+        
+        # Step 3: Get all endpoints from both backend and frontend
+        backend_endpoints = self._get_all_endpoints(backend_config) if backend_config else []
+        frontend_endpoints = self._get_all_frontend_endpoints(frontend_config) if frontend_config else []
+        
+        # Combine all endpoints with a type flag to distinguish them
+        all_endpoints = []
+        for endpoint in backend_endpoints:
+            endpoint["endpoint_type"] = "backend"
+            all_endpoints.append(endpoint)
+        
+        for endpoint in frontend_endpoints:
+            endpoint["endpoint_type"] = "frontend"
+            all_endpoints.append(endpoint)
+        
+        if not all_endpoints:
             return {"error": "No endpoints available in your configuration", "status": 400}
         
-        best_endpoint = self._find_best_endpoint(prompt, endpoints)
+        # Step 4: Find the best matching endpoint
+        best_endpoint = self._find_best_endpoint(prompt, all_endpoints)
         if not best_endpoint:
             return {"error": "I don't think I can do this with your available endpoints", "status": 400}
         
-        # Step 4: Fill in the endpoint schema
-        filled_schema = self._fill_schema(prompt, best_endpoint)
-        if "error" in filled_schema:
-            return filled_schema
-        
-        # Step 5: Send the request to the endpoint
-        response = self._send_request(best_endpoint, filled_schema)
-        
-        return {
-            "status": 200,
-            "endpoint_used": best_endpoint.get("name", "Unknown endpoint"),
-            "request_data": filled_schema,
-            "response": response
-        }
+        # Step 5: Handle the endpoint based on its type
+        if best_endpoint.get("endpoint_type") == "frontend":
+            # For frontend endpoints, just return the URL
+            return {
+                "url": best_endpoint.get("url", ""),
+                "description": best_endpoint.get("description", "")
+            }
+        else:
+            # For backend endpoints, fill the schema and send the request
+            filled_schema = self._fill_schema(prompt, best_endpoint)
+            if "error" in filled_schema:
+                return filled_schema
+            
+            # Send the request to the endpoint
+            response = self._send_request(best_endpoint, filled_schema)
+            
+            return {
+                "status": 200,
+                "endpoint_type": "backend",
+                "endpoint_used": best_endpoint.get("name", "Unknown endpoint"),
+                "request_data": filled_schema,
+                "response": response
+            }
     
     def _get_all_endpoints(self, backend_config: Dict) -> List[Dict]:
         """
         Extract all endpoints from the backend configuration
         """
+        if not backend_config:
+            return []
+            
         endpoints = []
         folders = backend_config.get("folders", [])
         
@@ -681,14 +714,40 @@ class EndpointAgent:
         
         return endpoints
     
+    def _get_all_frontend_endpoints(self, frontend_config: Dict) -> List[Dict]:
+        """
+        Extract all endpoints from the frontend configuration
+        """
+        if not frontend_config:
+            return []
+            
+        endpoints = []
+        folders = frontend_config.get("folders", [])
+        
+        # Process each folder
+        for folder in folders:
+            folder_endpoints = folder.get("endpoints", [])
+            for endpoint in folder_endpoints:
+                if "name" in endpoint and "url" in endpoint:
+                    # Frontend endpoints have description instead of schema
+                    endpoints.append(endpoint)
+        
+        return endpoints
+    
     def _find_best_endpoint(self, prompt: str, endpoints: List[Dict]) -> Optional[Dict]:
         """
         Find the best matching endpoint based on the user prompt
         """
-        if self.has_llm:
-            return self._find_endpoint_with_langchain(prompt, endpoints)
-        else:
-            return self._find_endpoint_with_keywords(prompt, endpoints)
+        try:
+            if self.has_llm:
+                return self._find_endpoint_with_langchain(prompt, endpoints)
+        except Exception as e:
+            print("Find Best Endpoint: " + traceback.format_exc())
+            print(f"LLM endpoint selection failed: {str(e)}")
+        # Fall back to keyword matching
+
+        return self._find_endpoint_with_keywords(prompt, endpoints)
+    
     
     def _find_endpoint_with_keywords(self, prompt: str, endpoints: List[Dict]) -> Optional[Dict]:
         """
@@ -700,6 +759,7 @@ class EndpointAgent:
         
         for endpoint in endpoints:
             name = endpoint.get("name", "").lower()
+            # Use description from both backend and frontend endpoints
             description = endpoint.get("description", "").lower()
             
             # Simple keyword matching score
@@ -727,27 +787,26 @@ class EndpointAgent:
             return best_match
         return None
     
+
     def _find_endpoint_with_langchain(self, prompt: str, endpoints: List[Dict]) -> Optional[Dict]:
         """
         Use LangChain and DeepSeek to find the best endpoint based on understanding the prompt
         """
-        # Format endpoints for the LLM
+        # Format endpoints for the LLM, including endpoint type
         endpoints_json = json.dumps([{
             "name": ep.get("name", ""),
             "description": ep.get("description", ""),
-            "url": ep.get("url", "")
+            "url": ep.get("url", ""),
+            "type": ep.get("endpoint_type", "backend")  # Include the type
         } for ep in endpoints], indent=2)
         
         # Create a chain for endpoint selection
-        endpoint_chain = LLMChain(
-            llm=self.llm,
-            prompt=self.endpoint_selection_prompt,
-            output_key="endpoint_selection"
-        )
+        endpoint_chain = self.endpoint_selection_prompt | self.llm
         
         # Run the chain
         try:
-            result = endpoint_chain({"endpoints_json": endpoints_json, "user_prompt": prompt})
+            result = endpoint_chain.invoke({"endpoints_json": endpoints_json, "user_prompt": prompt})
+
             endpoint_selection = self.endpoint_parser.parse(result["endpoint_selection"])
             
             # Only proceed if a suitable endpoint was found
@@ -758,14 +817,24 @@ class EndpointAgent:
                         return endpoint
         except Exception as e:
             print(f"Error in endpoint selection: {str(e)}")
+            # Check if error is due to insufficient balance
+            error_str = str(e)
+            if "Insufficient Balance" in error_str or "402" in error_str:
+                print("Detected insufficient balance, falling back to keyword matching")
+                return self._find_endpoint_with_keywords(prompt, endpoints)
             return None
         
         return None
+    
     
     def _fill_schema(self, prompt: str, endpoint: Dict) -> Dict:
         """
         Fill in the endpoint schema based on the user prompt
         """
+        # Only applicable for backend endpoints
+        if endpoint.get("endpoint_type") == "frontend":
+            return {}
+            
         schema = endpoint.get("schema", {})
         if not schema:
             return {"error": "Endpoint has no schema defined", "status": 400}
@@ -781,11 +850,13 @@ class EndpointAgent:
             # If no example is available, try to extract parameters based on property definitions
             return self._simple_fill_from_properties(prompt, schema.get("properties", {}))
     
+    
     def _fill_schema_with_langchain(self, prompt: str, endpoint: Dict) -> Dict:
         """
         Use LangChain to fill in the schema based on the user prompt
         """
         schema = endpoint.get("schema", {})
+        schema = json.loads(schema)
         schema_json = json.dumps(schema, indent=2)
         
         # Get example if available
@@ -793,10 +864,7 @@ class EndpointAgent:
         example_json = json.dumps(example, indent=2) if example else "No example available"
         
         # Create a chain for schema filling
-        schema_chain = LLMChain(
-            llm=self.llm,
-            prompt=self.schema_filling_prompt
-        )
+        schema_chain = self.schema_filling_prompt | self.llm
         
         try:
             result = schema_chain({
@@ -829,11 +897,18 @@ class EndpointAgent:
         
         except Exception as e:
             print(f"Error in schema filling: {str(e)}")
+            
+            # Check if error is due to insufficient balance
+            error_str = str(e)
+            if "Insufficient Balance" in error_str or "402" in error_str:
+                print("Detected insufficient balance in schema filling, using fallback method")
+            
             # Fallback to simple methods
             if example:
                 return self._simple_fill_from_example(prompt, example)
             else:
                 return self._simple_fill_from_properties(prompt, schema.get("properties", {}))
+            
     
     def _simple_fill_from_example(self, prompt: str, example: Dict) -> Dict:
         """
@@ -920,12 +995,16 @@ class EndpointAgent:
         return result
     
     def _send_request(self, endpoint: Dict, data: Dict) -> Dict:
-        """
-        Send the request to the selected endpoint
-        """
+        # Only execute for backend endpoints
+        if endpoint.get("endpoint_type") == "frontend":
+            return {"error": "Cannot execute frontend endpoints"}
+            
         url = endpoint.get("url", "")
+        print("send req to:" + url)
         method = endpoint.get("method", "POST").upper()
-        
+
+        print(f"Sending {method} request to {url} with data: {data}")  # Debugging
+
         try:
             if method == "GET":
                 response = requests.get(url, params=data)
@@ -937,9 +1016,11 @@ class EndpointAgent:
                 response = requests.delete(url, json=data)
             else:
                 return {"error": f"Unsupported HTTP method: {method}"}
-            
-            # Handle the response
-            if response.status_code >= 200 and response.status_code < 300:
+
+            print(f"Response Status: {response.status_code}")
+            print(f"Response Data: {response.text}")
+
+            if 200 <= response.status_code < 300:
                 try:
                     return response.json()
                 except json.JSONDecodeError:
@@ -950,9 +1031,11 @@ class EndpointAgent:
                     "details": response.text
                 }
         except Exception as e:
+            print("Send Request: " + traceback.format_exc())
             return {"error": f"Request failed: {str(e)}"}
 
-# Example Django view using the agent
+
+@csrf_exempt
 def process_prompt(request):
     try:
         data = json.loads(request.body)
@@ -970,7 +1053,7 @@ def process_prompt(request):
             users_collection=users_collection,
             backend_collection=backend_collection,
             frontend_collection=frontend_collection,
-            deepseek_api_key=f'{settings.DEEPSEEK_API_KEY}',
+            deepseek_api_key=settings.DEEPSEEK_API_KEY,
         )
         
         # Process the prompt
@@ -978,11 +1061,11 @@ def process_prompt(request):
         
         return JsonResponse(result, status=result.get("status", 200))
     except Exception as error:
+        print("process_prompt: " + traceback.format_exc())
         return JsonResponse(
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
-    
 
 
 @csrf_exempt
