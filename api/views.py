@@ -836,6 +836,7 @@ class EndpointAgent:
             return {}
             
         schema = endpoint.get("schema", {})
+        schema = json.loads(schema)
         if not schema:
             return {"error": "Endpoint has no schema defined", "status": 400}
         
@@ -859,15 +860,15 @@ class EndpointAgent:
         schema = json.loads(schema)
         schema_json = json.dumps(schema, indent=2)
         
-        # Get example if available
-        example = schema.get("example", {})
+        # Get example if available - Setting as schema itself for now
+        example = json.loads(endpoint.get("schema", {}))
         example_json = json.dumps(example, indent=2) if example else "No example available"
         
         # Create a chain for schema filling
         schema_chain = self.schema_filling_prompt | self.llm
         
         try:
-            result = schema_chain({
+            result = schema_chain.invoke({
                 "endpoint_name": endpoint.get("name", ""),
                 "schema_json": schema_json,
                 "example_json": example_json,
