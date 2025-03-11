@@ -553,6 +553,10 @@ def backend_details(request):
         )
     
 
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
     reason: str = Field(description="Reason for selecting this endpoint")
@@ -621,72 +625,90 @@ class EndpointAgent:
             )
     
     def process_prompt(self, prompt: str, api_key: str):
-        """
-        Main method to process a user prompt using their API key
-        """
-        # Step 1: Verify user and get their backend configuration
+        logging.debug(f"Received request with prompt: {prompt}")
+        logging.debug(f"API Key received: {api_key}")
+
+        # Step 1: Verify user
         user = self.users_collection.find_one({"api_key": api_key})
         if not user:
+            logging.error("User not found.")
             return {"error": "User not found", "status": 404}
-        
-        # Get the backend and frontend document IDs
+
+        logging.debug(f"User found: {user}")
+
+        # Step 2: Get backend and frontend document IDs
         backend_id = user.get("backend")
         frontend_id = user.get("frontend")
-        
+
+        logging.debug(f"Backend ID: {backend_id}, Frontend ID: {frontend_id}")
+
         if not backend_id and not frontend_id:
+            logging.error("No configuration found for this user.")
             return {"error": "No configuration found for this user", "status": 404}
-        
-        # Step 2: Retrieve the backend and frontend configurations
-        backend_config = None
-        frontend_config = None
-        
-        if backend_id:
-            backend_config = self.backend_collection.find_one({"_id": ObjectId(backend_id)})
-        
-        if frontend_id:
-            frontend_config = self.frontend_collection.find_one({"_id": ObjectId(frontend_id)})
-        
+
+        # Step 3: Retrieve backend and frontend configurations
+        backend_config = self.backend_collection.find_one({"_id": ObjectId(backend_id)}) if backend_id else None
+        frontend_config = self.frontend_collection.find_one({"_id": ObjectId(frontend_id)}) if frontend_id else None
+
+        logging.debug(f"Backend Config: {json.dumps(backend_config, default=str) if backend_config else 'None'}")
+        logging.debug(f"Frontend Config: {json.dumps(frontend_config, default=str) if frontend_config else 'None'}")
+
         if not backend_config and not frontend_config:
+            logging.error("Configuration documents not found.")
             return {"error": "Configuration documents not found", "status": 404}
-        
-        # Step 3: Get all endpoints from both backend and frontend
+
+        # Step 4: Get all endpoints
         backend_endpoints = self._get_all_endpoints(backend_config) if backend_config else []
         frontend_endpoints = self._get_all_frontend_endpoints(frontend_config) if frontend_config else []
-        
-        # Combine all endpoints with a type flag to distinguish them
+
+        logging.debug(f"Retrieved {len(backend_endpoints)} backend endpoints and {len(frontend_endpoints)} frontend endpoints.")
+
         all_endpoints = []
         for endpoint in backend_endpoints:
             endpoint["endpoint_type"] = "backend"
             all_endpoints.append(endpoint)
-        
+
         for endpoint in frontend_endpoints:
             endpoint["endpoint_type"] = "frontend"
             all_endpoints.append(endpoint)
-        
+
         if not all_endpoints:
+            logging.error("No endpoints available in configuration.")
             return {"error": "No endpoints available in your configuration", "status": 400}
-        
-        # Step 4: Find the best matching endpoint
+
+        logging.debug(f"Total available endpoints: {json.dumps(all_endpoints, indent=2)}")
+
+        # Step 5: Find the best matching endpoint
         best_endpoint = self._find_best_endpoint(prompt, all_endpoints)
+
         if not best_endpoint:
+            logging.warning("No suitable endpoint found.")
             return {"error": "I don't think I can do this with your available endpoints", "status": 400}
-        
-        # Step 5: Handle the endpoint based on its type
+
+        logging.debug(f"Selected Endpoint: {json.dumps(best_endpoint, indent=2)}")
+
+        # Step 6: Handle the selected endpoint
         if best_endpoint.get("endpoint_type") == "frontend":
-            # For frontend endpoints, just return the URL
+            logging.info("Returning frontend endpoint URL.")
             return {
                 "url": best_endpoint.get("url", ""),
                 "description": best_endpoint.get("description", "")
             }
         else:
-            # For backend endpoints, fill the schema and send the request
+            # Step 7: Fill schema and send request for backend endpoint
+            logging.info("Processing backend endpoint request.")
             filled_schema = self._fill_schema(prompt, best_endpoint)
+            
             if "error" in filled_schema:
+                logging.error(f"Schema filling error: {filled_schema}")
                 return filled_schema
-            
-            # Send the request to the endpoint
+
+            logging.debug(f"Filled schema: {json.dumps(filled_schema, indent=2)}")
+
+            # Step 8: Send request
             response = self._send_request(best_endpoint, filled_schema)
-            
+            logging.debug(f"Response from backend: {response}")
+
             return {
                 "status": 200,
                 "endpoint_type": "backend",
@@ -694,6 +716,7 @@ class EndpointAgent:
                 "request_data": filled_schema,
                 "response": response
             }
+        
     
     def _get_all_endpoints(self, backend_config: Dict) -> List[Dict]:
         """
@@ -751,40 +774,41 @@ class EndpointAgent:
     
     def _find_endpoint_with_keywords(self, prompt: str, endpoints: List[Dict]) -> Optional[Dict]:
         """
-        Fallback method using keyword matching when LLM is not available
+        Fallback method using keyword matching when LLM is not available.
         """
         prompt_lower = prompt.lower()
         best_match = None
         highest_score = 0
-        
+
+        logging.debug(f"Matching prompt: {prompt_lower}")
+
         for endpoint in endpoints:
             name = endpoint.get("name", "").lower()
-            # Use description from both backend and frontend endpoints
             description = endpoint.get("description", "").lower()
             
-            # Simple keyword matching score
             score = 0
             if name in prompt_lower:
                 score += 5
             
-            name_words = name.split()
-            for word in name_words:
-                if len(word) > 3 and word in prompt_lower:  # Only consider words longer than 3 chars
+            for word in name.split():
+                if len(word) > 3 and word in prompt_lower:
                     score += 1
-            
-            if description:
-                description_words = description.split()
-                for word in description_words:
-                    if len(word) > 3 and word in prompt_lower:
-                        score += 0.5
-            
+
+            for word in description.split():
+                if len(word) > 3 and word in prompt_lower:
+                    score += 0.5
+
+            logging.debug(f"Endpoint '{endpoint.get('name', '')}' scored {score}")
+
             if score > highest_score:
                 highest_score = score
                 best_match = endpoint
-        
-        # Only return if we have a reasonable match
-        if highest_score >= 1:
+
+        if best_match:
+            logging.info(f"Best matched endpoint: {best_match.get('name', 'Unknown')}")
             return best_match
+        
+        logging.warning("No suitable endpoint found using keyword matching.")
         return None
     
 
@@ -843,8 +867,8 @@ class EndpointAgent:
         if self.has_llm:
             return self._fill_schema_with_langchain(prompt, endpoint)
         else:
-            # Use example schema as a template if available
-            example = schema.get("example", {})
+            # Use schema as a template if available
+            example = schema
             if example:
                 return self._simple_fill_from_example(prompt, example)
             
@@ -912,37 +936,8 @@ class EndpointAgent:
             
     
     def _simple_fill_from_example(self, prompt: str, example: Dict) -> Dict:
-        """
-        Simple parameter filling using regex and example values as fallbacks
-        """
-        import re
-        result = {}
-        
-        for key, value in example.items():
-            # Try to extract values based on key name
-            pattern = rf"{key}[:\s]+([^,\.\s]+)"
-            match = re.search(pattern, prompt, re.IGNORECASE)
-            
-            if match:
-                extracted_value = match.group(1)
-                # Type conversion based on example value type
-                if isinstance(value, int):
-                    try:
-                        result[key] = int(extracted_value)
-                    except ValueError:
-                        result[key] = value  # Use example value as fallback
-                elif isinstance(value, float):
-                    try:
-                        result[key] = float(extracted_value)
-                    except ValueError:
-                        result[key] = value
-                else:
-                    result[key] = extracted_value
-            else:
-                # Use example value if we can't extract from prompt
-                result[key] = value
-        
-        return result
+       return example
+    
     
     def _simple_fill_from_properties(self, prompt: str, properties: Dict) -> Dict:
         """
@@ -1044,6 +1039,7 @@ def process_prompt(request):
         api_key = data.get("api_key")
         
         if not prompt or not api_key:
+            
             return JsonResponse(
                 {"message": "Missing prompt or API key"},
                 status=400
