@@ -19,14 +19,6 @@ import pandas as pd
 import random
 import string
 
-from typing import Dict, List, Optional, Any
-from langchain_deepseek import ChatDeepSeek
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, Field
-from langchain.output_parsers import OutputFixingParser
-
 client = MongoClient(f'{settings.MONGO_URI}')
 db = client['Limeblock']
 users_collection = db['Users']
@@ -554,6 +546,11 @@ def backend_details(request):
     
 
 import logging
+from typing import Dict, List, Optional
+from pydantic import BaseModel, Field
+from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
+from langchain.prompts import PromptTemplate
+from langchain_deepseek import ChatDeepSeek
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -575,7 +572,7 @@ class EndpointAgent:
                 model="deepseek-chat",   
                 temperature=0,               
                 max_tokens=1000,          
-                api_key=f'{settings.DEEPSEEK_API_KEY}',
+                api_key=deepseek_api_key,
             )
             
             # Create parsers
@@ -604,24 +601,21 @@ class EndpointAgent:
             
             self.schema_filling_prompt = PromptTemplate(
                 template="""
-                You are an API parameter extraction assistant. Given a user request and endpoint schema, 
+                You are an API parameter extraction assistant. Given a user request and an example schema, 
                 extract the appropriate values for each parameter.
                 
                 Endpoint: {endpoint_name}
                 
-                Schema:
+                Example Schema:
                 {schema_json}
-                
-                Example (if available):
-                {example_json}
                 
                 User Request: {user_prompt}
                 
                 Extract values for each parameter in the schema based on the user request.
-                Return a valid JSON object that contains parameter names as keys and extracted values that match the expected types.
-                Use the example values as defaults if you cannot extract from the user request.
+                Return a valid JSON object that matches the structure of the example schema but with values extracted from the user request.
+                Only modify values, not keys or structure. If you cannot extract a value, use the example value from the schema.
                 """,
-                input_variables=["endpoint_name", "schema_json", "example_json", "user_prompt"]
+                input_variables=["endpoint_name", "schema_json", "user_prompt"]
             )
     
     def process_prompt(self, prompt: str, api_key: str):
@@ -674,7 +668,7 @@ class EndpointAgent:
 
         if not all_endpoints:
             logging.error("No endpoints available in configuration.")
-            return {"error": "No endpoints available in your configuration", "status": 400}
+            return {"message": "No endpoints available in your configuration", "status": 200}
 
         logging.debug(f"Total available endpoints: {json.dumps(all_endpoints, indent=2)}")
 
@@ -683,7 +677,7 @@ class EndpointAgent:
 
         if not best_endpoint:
             logging.warning("No suitable endpoint found.")
-            return {"error": "I don't think I can do this with your available endpoints", "status": 400}
+            return {"message": "I couldn't find a suitable endpoint for your request", "status": 200}
 
         logging.debug(f"Selected Endpoint: {json.dumps(best_endpoint, indent=2)}")
 
@@ -691,6 +685,8 @@ class EndpointAgent:
         if best_endpoint.get("endpoint_type") == "frontend":
             logging.info("Returning frontend endpoint URL.")
             return {
+                "status": 200,
+                "endpoint_type": "frontend",
                 "url": best_endpoint.get("url", ""),
                 "description": best_endpoint.get("description", "")
             }
@@ -701,7 +697,7 @@ class EndpointAgent:
             
             if "error" in filled_schema:
                 logging.error(f"Schema filling error: {filled_schema}")
-                return filled_schema
+                return {"message": filled_schema.get("error"), "status": 200}
 
             logging.debug(f"Filled schema: {json.dumps(filled_schema, indent=2)}")
 
@@ -763,12 +759,14 @@ class EndpointAgent:
         """
         try:
             if self.has_llm:
-                return self._find_endpoint_with_langchain(prompt, endpoints)
+                result = self._find_endpoint_with_langchain(prompt, endpoints)
+                if result:
+                    return result
         except Exception as e:
             print("Find Best Endpoint: " + traceback.format_exc())
             print(f"LLM endpoint selection failed: {str(e)}")
+        
         # Fall back to keyword matching
-
         return self._find_endpoint_with_keywords(prompt, endpoints)
     
     
@@ -804,7 +802,8 @@ class EndpointAgent:
                 highest_score = score
                 best_match = endpoint
 
-        if best_match:
+        # Only return if the score is above a threshold
+        if highest_score > 0:
             logging.info(f"Best matched endpoint: {best_match.get('name', 'Unknown')}")
             return best_match
         
@@ -825,27 +824,30 @@ class EndpointAgent:
         } for ep in endpoints], indent=2)
         
         # Create a chain for endpoint selection
-        endpoint_chain = self.endpoint_selection_prompt | self.llm
-        
-        # Run the chain
         try:
-            result = endpoint_chain.invoke({"endpoints_json": endpoints_json, "user_prompt": prompt})
-
-            endpoint_selection = self.endpoint_parser.parse(result["endpoint_selection"])
+            result = self.llm.invoke(self.endpoint_selection_prompt.format(
+                endpoints_json=endpoints_json, 
+                user_prompt=prompt
+            ))
             
-            # Only proceed if a suitable endpoint was found
-            if endpoint_selection.suitable:
-                # Find the endpoint with matching name
-                for endpoint in endpoints:
-                    if endpoint.get("name", "") == endpoint_selection.endpoint_name:
-                        return endpoint
+            # Parse the result
+            try:
+                endpoint_selection = self.endpoint_parser.parse(result.content)
+                
+                # Only proceed if a suitable endpoint was found
+                if endpoint_selection.suitable:
+                    # Find the endpoint with matching name
+                    for endpoint in endpoints:
+                        if endpoint.get("name", "") == endpoint_selection.endpoint_name:
+                            return endpoint
+            except Exception as parse_error:
+                logging.error(f"Error parsing endpoint selection: {str(parse_error)}")
+                return None
+                
         except Exception as e:
-            print(f"Error in endpoint selection: {str(e)}")
-            # Check if error is due to insufficient balance
-            error_str = str(e)
-            if "Insufficient Balance" in error_str or "402" in error_str:
-                print("Detected insufficient balance, falling back to keyword matching")
-                return self._find_endpoint_with_keywords(prompt, endpoints)
+            logging.error(f"Error in endpoint selection: {str(e)}")
+            if "Insufficient Balance" in str(e) or "402" in str(e):
+                logging.warning("Detected insufficient balance, falling back to keyword matching")
             return None
         
         return None
@@ -859,136 +861,68 @@ class EndpointAgent:
         if endpoint.get("endpoint_type") == "frontend":
             return {}
             
-        schema = endpoint.get("schema", {})
-        schema = json.loads(schema)
-        if not schema:
-            return {"error": "Endpoint has no schema defined", "status": 400}
-        
-        if self.has_llm:
-            return self._fill_schema_with_langchain(prompt, endpoint)
-        else:
-            # Use schema as a template if available
-            example = schema
-            if example:
-                return self._simple_fill_from_example(prompt, example)
+        try:
+            schema = endpoint.get("schema", "{}")
+            # The schema is already the example schema that would be sent to the endpoint
+            schema_dict = json.loads(schema) if isinstance(schema, str) else schema
             
-            # If no example is available, try to extract parameters based on property definitions
-            return self._simple_fill_from_properties(prompt, schema.get("properties", {}))
+            if schema_dict is None:
+                return {"error": "Endpoint has no schema defined"}
+            
+            if self.has_llm:
+                return self._fill_schema_with_langchain(prompt, endpoint, schema_dict)
+            else:
+                return self._simple_fill_from_example(prompt, schema_dict)
+        except json.JSONDecodeError:
+            logging.error(f"Invalid schema JSON: {schema}")
+            return {"error": "Invalid schema format"}
+        except Exception as e:
+            logging.error(f"Error filling schema: {str(e)}")
+            return {"error": f"Failed to fill schema: {str(e)}"}
     
     
-    def _fill_schema_with_langchain(self, prompt: str, endpoint: Dict) -> Dict:
+    def _fill_schema_with_langchain(self, prompt: str, endpoint: Dict, schema_dict: Dict) -> Dict:
         """
         Use LangChain to fill in the schema based on the user prompt
         """
-        schema = endpoint.get("schema", {})
-        schema = json.loads(schema)
-        schema_json = json.dumps(schema, indent=2)
-        
-        # Get example if available - Setting as schema itself for now
-        example = json.loads(endpoint.get("schema", {}))
-        example_json = json.dumps(example, indent=2) if example else "No example available"
-        
-        # Create a chain for schema filling
-        schema_chain = self.schema_filling_prompt | self.llm
+        schema_json = json.dumps(schema_dict, indent=2)
         
         try:
-            result = schema_chain.invoke({
-                "endpoint_name": endpoint.get("name", ""),
-                "schema_json": schema_json,
-                "example_json": example_json,
-                "user_prompt": prompt
-            })
+            result = self.llm.invoke(self.schema_filling_prompt.format(
+                endpoint_name=endpoint.get("name", ""),
+                schema_json=schema_json,
+                user_prompt=prompt
+            ))
             
-            # Parse the result as JSON
+            # Try to extract JSON from the response
             try:
-                filled_schema = json.loads(result["text"])
+                # First try direct JSON parsing
+                import re
+                
+                # Look for JSON in code blocks
+                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result.content, re.DOTALL)
+                if json_match:
+                    filled_schema = json.loads(json_match.group(1))
+                    return filled_schema
+                
+                # Try parsing the whole text as JSON
+                filled_schema = json.loads(result.content)
                 return filled_schema
             except json.JSONDecodeError:
-                # If JSON parsing fails, try to extract JSON from the text
-                import re
-                json_match = re.search(r'```json\n(.*?)\n```', result["text"], re.DOTALL)
-                if json_match:
-                    try:
-                        filled_schema = json.loads(json_match.group(1))
-                        return filled_schema
-                    except:
-                        pass
+                logging.warning("Failed to parse LLM response as JSON, using example schema")
+                return schema_dict
                 
-                # Fallback to simple methods if LLM approach fails
-                if example:
-                    return self._simple_fill_from_example(prompt, example)
-                else:
-                    return self._simple_fill_from_properties(prompt, schema.get("properties", {}))
-        
         except Exception as e:
-            print(f"Error in schema filling: {str(e)}")
-            
-            # Check if error is due to insufficient balance
-            error_str = str(e)
-            if "Insufficient Balance" in error_str or "402" in error_str:
-                print("Detected insufficient balance in schema filling, using fallback method")
-            
-            # Fallback to simple methods
-            if example:
-                return self._simple_fill_from_example(prompt, example)
-            else:
-                return self._simple_fill_from_properties(prompt, schema.get("properties", {}))
+            logging.error(f"Error in schema filling: {str(e)}")
+            # Fallback to simple method
+            return schema_dict
             
     
-    def _simple_fill_from_example(self, prompt: str, example: Dict) -> Dict:
-       return example
-    
-    
-    def _simple_fill_from_properties(self, prompt: str, properties: Dict) -> Dict:
+    def _simple_fill_from_example(self, prompt: str, schema_dict: Dict) -> Dict:
         """
-        Simple parameter filling using regex and property type hints
+        Use the schema as-is since it's already an example
         """
-        import re
-        result = {}
-        
-        for key, prop_info in properties.items():
-            # Try to extract values based on key name
-            pattern = rf"{key}[:\s]+([^,\.\s]+)"
-            match = re.search(pattern, prompt, re.IGNORECASE)
-            
-            if match:
-                extracted_value = match.group(1)
-                # Type conversion based on property type
-                prop_type = prop_info.get("type", "string")
-                
-                if prop_type == "integer":
-                    try:
-                        result[key] = int(extracted_value)
-                    except ValueError:
-                        result[key] = 0
-                elif prop_type == "number":
-                    try:
-                        result[key] = float(extracted_value)
-                    except ValueError:
-                        result[key] = 0.0
-                elif prop_type == "boolean":
-                    result[key] = extracted_value.lower() in ["true", "yes", "1"]
-                else:
-                    result[key] = extracted_value
-            else:
-                # Use default value if defined
-                if "default" in prop_info:
-                    result[key] = prop_info["default"]
-                else:
-                    # Use type-based defaults
-                    prop_type = prop_info.get("type", "string")
-                    if prop_type == "string":
-                        result[key] = ""
-                    elif prop_type == "integer" or prop_type == "number":
-                        result[key] = 0
-                    elif prop_type == "boolean":
-                        result[key] = False
-                    elif prop_type == "array":
-                        result[key] = []
-                    elif prop_type == "object":
-                        result[key] = {}
-        
-        return result
+        return schema_dict
     
     def _send_request(self, endpoint: Dict, data: Dict) -> Dict:
         # Only execute for backend endpoints
@@ -996,10 +930,10 @@ class EndpointAgent:
             return {"error": "Cannot execute frontend endpoints"}
             
         url = endpoint.get("url", "")
-        print("send req to:" + url)
+        logging.info(f"Sending request to: {url}")
         method = endpoint.get("method", "POST").upper()
 
-        print(f"Sending {method} request to {url} with data: {data}")  # Debugging
+        logging.debug(f"Sending {method} request with data: {json.dumps(data)}")
 
         try:
             if method == "GET":
@@ -1013,8 +947,8 @@ class EndpointAgent:
             else:
                 return {"error": f"Unsupported HTTP method: {method}"}
 
-            print(f"Response Status: {response.status_code}")
-            print(f"Response Data: {response.text}")
+            logging.debug(f"Response Status: {response.status_code}")
+            logging.debug(f"Response Data: {response.text[:500]}...")  # Log truncated response
 
             if 200 <= response.status_code < 300:
                 try:
@@ -1024,10 +958,10 @@ class EndpointAgent:
             else:
                 return {
                     "error": f"Request failed with status code: {response.status_code}",
-                    "details": response.text
+                    "details": response.text[:1000]  # Truncate long error responses
                 }
         except Exception as e:
-            print("Send Request: " + traceback.format_exc())
+            logging.error("Send Request Error: " + traceback.format_exc())
             return {"error": f"Request failed: {str(e)}"}
 
 
@@ -1039,7 +973,6 @@ def process_prompt(request):
         api_key = data.get("api_key")
         
         if not prompt or not api_key:
-            
             return JsonResponse(
                 {"message": "Missing prompt or API key"},
                 status=400
@@ -1050,15 +983,20 @@ def process_prompt(request):
             users_collection=users_collection,
             backend_collection=backend_collection,
             frontend_collection=frontend_collection,
-            deepseek_api_key=settings.DEEPSEEK_API_KEY,
+            deepseek_api_key=f'{settings.DEEPSEEK_API_KEY}',
         )
         
         # Process the prompt
         result = agent.process_prompt(prompt, api_key)
         
-        return JsonResponse(result, status=result.get("status", 200))
+        # Ensure we return 200 status even if no endpoint is found
+        if "status" in result and result["status"] != 200:
+            result_status = result.pop("status", 200)
+            return JsonResponse(result, status=result_status)
+        else:
+            return JsonResponse(result, status=200)
     except Exception as error:
-        print("process_prompt: " + traceback.format_exc())
+        logging.error("process_prompt error: " + traceback.format_exc())
         return JsonResponse(
             {"message": "Internal Server Error", "error": str(error)},
             status=500
