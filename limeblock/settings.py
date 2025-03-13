@@ -27,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['127.0.0.1']
+ALLOWED_HOSTS = ['127.0.0.1', '76af-2600-1700-4880-efc0-cbf-3e51-554c-6c70.ngrok-free.app']
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",

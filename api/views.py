@@ -552,8 +552,6 @@ from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import PromptTemplate
 from langchain_deepseek import ChatDeepSeek
 
-logging.basicConfig(level=logging.DEBUG)
-
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
     reason: str = Field(description="Reason for selecting this endpoint")
@@ -1051,3 +1049,146 @@ def public_frontend_details(request):
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
+    
+
+# STRIPE CHECKOUT STUFF
+
+# Set Stripe API key
+stripe.api_key = settings.STRIPE_SK
+
+# Stripe webhook secret
+WEBHOOK_SECRET = settings.STRIPE_WEBHOOK_SECRET
+
+@csrf_exempt
+def create_checkout_session(request):
+    """
+    Creates a Stripe Checkout Session for recurring monthly payments.
+    """
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            product_id = data.get("product_id")
+            user_id = data.get("user_id")
+            print(user_id)
+
+            if not user_id:
+                return JsonResponse({"url": "http://localhost:3000/"})
+
+            # Product price mapping for recurring subscriptions
+            product_to_price_mapping = {
+                "prod_RvtLgN1zOEG6iD": "price_1R21YdEK41Y7N6vui07ggvAY",
+                "prod_RvtL5HMB98eLLm": "price_1R21Z5EK41Y7N6vuuu4c44kW"
+            }
+
+            if product_id not in product_to_price_mapping:
+                return JsonResponse({"error": "Invalid Product ID"}, status=400)
+
+            # Create a Stripe Checkout Session for recurring payments
+            session = stripe.checkout.Session.create(
+                payment_method_types=["card"],
+                line_items=[
+                    {
+                        "price": product_to_price_mapping[product_id],
+                        "quantity": 1,
+                    }
+                ],
+                mode="subscription",  # Recurring subscription mode
+                success_url="http://localhost:3000/dashboard",
+                cancel_url="http://localhost:3000/dashboard",
+                metadata={
+                    "user_id": user_id,  # Attach user ID as metadata
+                    "product_id": product_id,  # Attach product ID as metadata
+                },
+                subscription_data={
+                    "metadata": {
+                        "user_id": user_id,
+                        "product_id": product_id,
+                    }
+                }
+            )
+
+            return JsonResponse({"url": session.url})
+
+        except Exception as e:
+            print(traceback.format_exc())
+            return JsonResponse({"error": str(e)}, status=400)
+
+@csrf_exempt
+def stripe_webhook(request):
+    """
+    Handles Stripe webhook events.
+    """
+    payload = request.body
+    sig_header = request.META['HTTP_STRIPE_SIGNATURE']
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, WEBHOOK_SECRET
+        )
+    except stripe.error.SignatureVerificationError as e:
+        # Signature doesn't match
+        return JsonResponse({'error': 'Invalid signature'}, status=400)
+
+    # Handle checkout.session.completed
+    if event["type"] == "checkout.session.completed" or event["type"] == "invoice.paid":
+        session = event["data"]["object"]
+        handle_checkout_session(session)
+
+    return JsonResponse({"status": "success"}, status=200)
+
+
+def handle_checkout_session(session):
+    """
+    Processes the checkout session or invoice payment.
+    """
+    # Check if this is a checkout session or invoice
+    if 'metadata' in session and session.get('metadata'):
+        # This is a checkout.session.completed event
+        user_id = session["metadata"].get("user_id")
+        product_id = session["metadata"].get("product_id")
+    elif session.get('subscription'):
+        # This is an invoice.paid event
+        try:
+            # Get the subscription to access metadata
+            subscription = stripe.Subscription.retrieve(session.get('subscription'))
+            # Get metadata from the subscription
+            user_id = subscription.metadata.get('user_id')
+            product_id = subscription.metadata.get('product_id')
+        except Exception as e:
+            print(f"Error retrieving subscription data: {e}")
+            return
+    else:
+        print("Missing required data in session")
+        return
+        
+    print("handling payment...")
+
+    if not user_id:
+        print("no user id")
+        return
+        
+    user = users_collection.find_one({'_id': ObjectId(user_id)})
+    
+    if not user:
+        print(f"User not found: {user_id}")
+        return
+
+    if product_id == "prod_RvtLgN1zOEG6iD":
+        try:
+            users_collection.update_one({'_id': ObjectId(user_id)}, {
+                '$set': {'plan': 'startup', 'last_paid': datetime.datetime.today()}
+            })
+            print(f"Added/Updated Startup Plan to user {user_id}.")
+        except Exception as e:
+            print(f"Failed to update MongoDB: {e}")
+    
+    elif product_id == "prod_RvtL5HMB98eLLm":
+        try:
+            users_collection.update_one({'_id': ObjectId(user_id)}, {
+                '$set': {'plan': 'enterprise', 'last_paid': datetime.datetime.today()}
+            })
+            print(f"Added/Updated Enterprise Plan to user {user_id}.")
+        except Exception as e:
+            print(f"Failed to update MongoDB: {e}")
+    else:
+        print(f"Unknown product ID: {product_id}")
