@@ -545,12 +545,65 @@ def backend_details(request):
         )
     
 
+@csrf_exempt
+def public_frontend_details(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        api_key = data.get("api_key")
+
+        # Validate the request data
+        if not api_key:
+            return JsonResponse(
+                {"message": "Invalid payload: Missing api_key"},
+                status=400
+            )
+            
+        # Get the frontend document
+        frontend = frontend_collection.find_one({"api_key": api_key})
+        
+        if frontend:
+            # Convert ObjectId to string for JSON serialization
+            frontend['_id'] = str(frontend['_id'])
+            frontend['user_id'] = str(frontend['user_id'])
+            
+            return JsonResponse({
+                "success": True,
+                "frontend": {
+                    "id": frontend['_id'],
+                    "user_id": frontend['user_id'],
+                    "body": frontend.get('body', "#90F08C"),
+                    "eyes": frontend.get('eyes', "#FFFFFF"),
+                    "size": frontend.get('size', 12),
+                    "context_params": frontend.get('context_params', []),
+                    "url": frontend.get('url', ""),
+                    "folders": frontend.get('folders', []),
+                    "api_key": frontend.get('api_key'),
+                }
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found"},
+                status=404
+            )
+
+    except Exception as error:
+        print("Error fetching frontend details:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+    
+    
+
 import logging
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import PromptTemplate
 from langchain_deepseek import ChatDeepSeek
+
+logging.basicConfig(level=logging.DEBUG)
 
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
@@ -599,7 +652,7 @@ class EndpointAgent:
             
             self.schema_filling_prompt = PromptTemplate(
                 template="""
-                You are an API parameter extraction assistant. Given a user request and an example schema, 
+                You are an API parameter extraction assistant. Given a user request, context, and an example schema, 
                 extract the appropriate values for each parameter.
                 
                 Endpoint: {endpoint_name}
@@ -609,16 +662,29 @@ class EndpointAgent:
                 
                 User Request: {user_prompt}
                 
-                Extract values for each parameter in the schema based on the user request.
-                Return a valid JSON object that matches the structure of the example schema but with values extracted from the user request.
-                Only modify values, not keys or structure. If you cannot extract a value, use the example value from the schema.
+                User Context: {user_context}
+                
+                Instructions:
+                1. Extract values for each parameter in the schema based on the user request and context.
+                2. Return a valid JSON object that matches the structure of the example schema but with values extracted from the user request and context.
+                3. Only modify values, not keys or structure.
+                4. If a value in the example schema is wrapped in curly braces like '{user_id}', replace it with the corresponding value from the user context.
+                5. If you cannot extract a value AND it's not available in the context, use the example value from the schema.
+                6. If you're unsure about a critical value and it's not in the context, respond with a JSON object containing:
+                {{"needs_clarification": true, "missing_info": ["list of missing information needed"]}}
+                
+                Extract the values and return a valid JSON object.
                 """,
-                input_variables=["endpoint_name", "schema_json", "user_prompt"]
+                input_variables=["endpoint_name", "schema_json", "user_prompt", "user_context"]
             )
     
-    def process_prompt(self, prompt: str, api_key: str):
+    def process_prompt(self, prompt: str, api_key: str, context: Optional[Dict] = None):
+        if context is None:
+            context = {}
+
         logging.debug(f"Received request with prompt: {prompt}")
         logging.debug(f"API Key received: {api_key}")
+        logging.debug(f"Context received: {context}")
 
         # Step 1: Verify user
         user = self.users_collection.find_one({"api_key": api_key})
@@ -691,7 +757,13 @@ class EndpointAgent:
         else:
             # Step 7: Fill schema and send request for backend endpoint
             logging.info("Processing backend endpoint request.")
-            filled_schema = self._fill_schema(prompt, best_endpoint)
+            filled_schema = self._fill_schema(prompt, best_endpoint, context)
+    
+            # Add check for clarification needs
+            if filled_schema.get("needs_clarification", False):
+                missing_info = filled_schema.get("missing_info", [])
+                message = f"I need more information to complete your request. Please provide details about: {', '.join(missing_info)}"
+                return {"message": message, "status": 200, "needs_clarification": True}
             
             if "error" in filled_schema:
                 logging.error(f"Schema filling error: {filled_schema}")
@@ -851,68 +923,81 @@ class EndpointAgent:
         return None
     
     
-    def _fill_schema(self, prompt: str, endpoint: Dict) -> Dict:
+    def replace_context_placeholders(self, data, context: Dict):
         """
-        Fill in the endpoint schema based on the user prompt
+        Recursively replace {key} placeholders in strings with values from context.
         """
-        # Only applicable for backend endpoints
+        if isinstance(data, dict):
+            return {k: self.replace_context_placeholders(v, context) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self.replace_context_placeholders(item, context) for item in data]
+        elif isinstance(data, str):
+            # Use regex to find and replace {key} patterns
+            def replacer(match):
+                key = match.group(1)
+                return str(context.get(key, f'{{{key}}}'))  # Replace or retain placeholder
+            return re.sub(r'\{(\w+)\}', replacer, data)
+        else:
+            return data
+
+    def _fill_schema(self, prompt: str, endpoint: Dict, context: Dict) -> Dict:
+        """
+        Fill in the endpoint schema based on the user prompt.
+        """
         if endpoint.get("endpoint_type") == "frontend":
             return {}
-            
+
         try:
             schema = endpoint.get("schema", "{}")
-            # The schema is already the example schema that would be sent to the endpoint
             schema_dict = json.loads(schema) if isinstance(schema, str) else schema
-            
-            if schema_dict is None:
+            if not schema_dict:
                 return {"error": "Endpoint has no schema defined"}
-            
+
+            # Replace placeholders in the original schema with context values
+            schema_dict = self.replace_context_placeholders(schema_dict, context)
+
             if self.has_llm:
-                return self._fill_schema_with_langchain(prompt, endpoint, schema_dict)
+                return self._fill_schema_with_langchain(prompt, endpoint, schema_dict, context)
             else:
-                return self._simple_fill_from_example(prompt, schema_dict)
+                return self._simple_fill_from_example(prompt, schema_dict, context)
         except json.JSONDecodeError:
             logging.error(f"Invalid schema JSON: {schema}")
             return {"error": "Invalid schema format"}
         except Exception as e:
             logging.error(f"Error filling schema: {str(e)}")
             return {"error": f"Failed to fill schema: {str(e)}"}
-    
-    
-    def _fill_schema_with_langchain(self, prompt: str, endpoint: Dict, schema_dict: Dict) -> Dict:
+
+    def _fill_schema_with_langchain(self, prompt: str, endpoint: Dict, schema_dict: Dict, context: Dict) -> Dict:
         """
-        Use LangChain to fill in the schema based on the user prompt
+        Use LangChain to fill in the schema based on the user prompt.
         """
+        # Generate schema JSON with placeholders already replaced
         schema_json = json.dumps(schema_dict, indent=2)
-        
+        context_json = json.dumps(context, indent=2)
+        print("CONTEXT JSON:" + context_json)
+
         try:
             result = self.llm.invoke(self.schema_filling_prompt.format(
                 endpoint_name=endpoint.get("name", ""),
                 schema_json=schema_json,
-                user_prompt=prompt
+                user_prompt=prompt,
+                user_context=context_json
             ))
-            
-            # Try to extract JSON from the response
+
+            # Extract JSON from response
             try:
-                # First try direct JSON parsing
-                import re
-                
-                # Look for JSON in code blocks
                 json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result.content, re.DOTALL)
-                if json_match:
-                    filled_schema = json.loads(json_match.group(1))
-                    return filled_schema
+                filled_schema = json.loads(json_match.group(1)) if json_match else json.loads(result.content)
                 
-                # Try parsing the whole text as JSON
-                filled_schema = json.loads(result.content)
+                # Ensure any remaining placeholders are replaced
+                filled_schema = self.replace_context_placeholders(filled_schema, context)
                 return filled_schema
             except json.JSONDecodeError:
                 logging.warning("Failed to parse LLM response as JSON, using example schema")
                 return schema_dict
-                
+
         except Exception as e:
             logging.error(f"Error in schema filling: {str(e)}")
-            # Fallback to simple method
             return schema_dict
             
     
@@ -969,6 +1054,7 @@ def process_prompt(request):
         data = json.loads(request.body)
         prompt = data.get("prompt")
         api_key = data.get("api_key")
+        context = data.get("context")
         
         if not prompt or not api_key:
             return JsonResponse(
@@ -985,7 +1071,7 @@ def process_prompt(request):
         )
         
         # Process the prompt
-        result = agent.process_prompt(prompt, api_key)
+        result = agent.process_prompt(prompt, api_key, context)
         
         # Ensure we return 200 status even if no endpoint is found
         if "status" in result and result["status"] != 200:
@@ -995,56 +1081,6 @@ def process_prompt(request):
             return JsonResponse(result, status=200)
     except Exception as error:
         logging.error("process_prompt error: " + traceback.format_exc())
-        return JsonResponse(
-            {"message": "Internal Server Error", "error": str(error)},
-            status=500
-        )
-
-
-@csrf_exempt
-def public_frontend_details(request):
-    try:
-        # Parse the incoming JSON request body
-        data = json.loads(request.body)
-        api_key = data.get("api_key")
-
-        # Validate the request data
-        if not api_key:
-            return JsonResponse(
-                {"message": "Invalid payload: Missing api_key"},
-                status=400
-            )
-            
-        # Get the frontend document
-        frontend = frontend_collection.find_one({"api_key": api_key})
-        
-        if frontend:
-            # Convert ObjectId to string for JSON serialization
-            frontend['_id'] = str(frontend['_id'])
-            frontend['user_id'] = str(frontend['user_id'])
-            
-            return JsonResponse({
-                "success": True,
-                "frontend": {
-                    "id": frontend['_id'],
-                    "user_id": frontend['user_id'],
-                    "body": frontend.get('body', "#90F08C"),
-                    "eyes": frontend.get('eyes', "#FFFFFF"),
-                    "size": frontend.get('size', 12),
-                    "context_params": frontend.get('context_params', []),
-                    "url": frontend.get('url', ""),
-                    "folders": frontend.get('folders', []),
-                    "api_key": frontend.get('api_key'),
-                }
-            }, status=200)
-        else:
-            return JsonResponse(
-                {"warning": "Frontend configuration not found"},
-                status=404
-            )
-
-    except Exception as error:
-        print("Error fetching frontend details:", error)
         return JsonResponse(
             {"message": "Internal Server Error", "error": str(error)},
             status=500
