@@ -603,7 +603,7 @@ from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import PromptTemplate
 from langchain_deepseek import ChatDeepSeek
 
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
@@ -621,8 +621,7 @@ class EndpointAgent:
         if self.has_llm:
             self.llm = ChatDeepSeek(
                 model="deepseek-chat",   
-                temperature=0,               
-                max_tokens=1000,          
+                temperature=0,                      
                 api_key=deepseek_api_key,
             )
             
@@ -634,13 +633,12 @@ class EndpointAgent:
             # Create prompt templates
             self.endpoint_selection_prompt = PromptTemplate(
                 template="""
-                You are an API endpoint selection assistant. Given a user request and available endpoints, 
-                select the most appropriate endpoint to fulfill the request.
+                I want to {user_prompt} by hitting one the following endpoints. 
                 
                 Available Endpoints:
                 {endpoints_json}
                 
-                User Request: {user_prompt}
+                Tell me which endpoint I should hit. 
                 
                 {format_instructions}
                 
@@ -652,30 +650,19 @@ class EndpointAgent:
             
             self.schema_filling_prompt = PromptTemplate(
                 template="""
-                You are an API parameter extraction assistant. Given a user request, context, and an example schema, 
-                extract the appropriate values for each parameter.
-                
-                Endpoint: {endpoint_name}
-                
                 Example Schema:
-                {schema_json}
-                
-                User Request: {user_prompt}
-                
-                User Context: {user_context}
-                
-                Instructions:
-                1. Extract values for each parameter in the schema based on the user request and context.
-                2. Return a valid JSON object that matches the structure of the example schema but with values extracted from the user request and context.
-                3. Only modify values, not keys or structure.
-                4. If a value in the example schema is wrapped in curly braces like '{user_id}', replace it with the corresponding value from the user context.
-                5. If you cannot extract a value AND it's not available in the context, use the example value from the schema.
-                6. If you're unsure about a critical value and it's not in the context, respond with a JSON object containing:
-                {{"needs_clarification": true, "missing_info": ["list of missing information needed"]}}
-                
-                Extract the values and return a valid JSON object.
+                {schema_json}  
+               
+                I want you to {user_prompt}, so change the schema json to fit what I am trying to do. Here is some context: {user_context}
+                Return a valid JSON object and nothing else. This schema is going to be sent to an endpoint called {endpoint_name} and it's described as {endpoint_description}
+                Fill in values surrounded by curly braces in schema like "user_id": "{{user_id}}" with things in the
+                context I gave you. 
+
+                Don't modify the structure of the schema, just change the values so it matches what I'm trying to do. 
+
+                If you don't think you can do this because you need more context from me or more instructions to fill the schema, please just message me back "I need this ---"
                 """,
-                input_variables=["endpoint_name", "schema_json", "user_prompt", "user_context"]
+                input_variables=["endpoint_name", "endpoint_description", "schema_json", "user_prompt", "user_context"]
             )
     
     def process_prompt(self, prompt: str, api_key: str, context: Optional[Dict] = None):
@@ -760,9 +747,8 @@ class EndpointAgent:
             filled_schema = self._fill_schema(prompt, best_endpoint, context)
     
             # Add check for clarification needs
-            if filled_schema.get("needs_clarification", False):
-                missing_info = filled_schema.get("missing_info", [])
-                message = f"I need more information to complete your request. Please provide details about: {', '.join(missing_info)}"
+            if isinstance(filled_schema, str):
+                message = filled_schema
                 return {"message": message, "status": 200, "needs_clarification": True}
             
             if "error" in filled_schema:
@@ -974,15 +960,22 @@ class EndpointAgent:
         # Generate schema JSON with placeholders already replaced
         schema_json = json.dumps(schema_dict, indent=2)
         context_json = json.dumps(context, indent=2)
+        print("ENDPOINT_NAME:" + endpoint.get("name", ""))
+        print("SCHEMA_JSON:" + schema_json)
+        print("USER_PROMPT:" + prompt)
         print("CONTEXT JSON:" + context_json)
 
         try:
             result = self.llm.invoke(self.schema_filling_prompt.format(
                 endpoint_name=endpoint.get("name", ""),
+                endpoint_description=endpoint.get("description", ""),
                 schema_json=schema_json,
                 user_prompt=prompt,
                 user_context=context_json
             ))
+
+            if isinstance(result, str):
+                return result
 
             # Extract JSON from response
             try:
