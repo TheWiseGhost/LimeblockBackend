@@ -603,7 +603,7 @@ from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import PromptTemplate
 from langchain_deepseek import ChatDeepSeek
 
-# logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
@@ -937,7 +937,7 @@ class EndpointAgent:
             schema = endpoint.get("schema", "{}")
             schema_dict = json.loads(schema) if isinstance(schema, str) else schema
             if not schema_dict:
-                return {"error": "Endpoint has no schema defined"}
+                return {}
 
             # Replace placeholders in the original schema with context values
             schema_dict = self.replace_context_placeholders(schema_dict, context)
