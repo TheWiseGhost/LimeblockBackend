@@ -664,6 +664,18 @@ class EndpointAgent:
                 """,
                 input_variables=["endpoint_name", "endpoint_description", "schema_json", "user_prompt", "user_context"]
             )
+
+            self.response_creation_prompt = PromptTemplate(
+                template="""
+                Prompt: {user_prompt}
+                Request processed using endpoint: {endpoint_name} that is described as {endpoint_description}
+
+                Response from server: {server_response}
+
+                Give a message that sums this up. 
+                """,
+                input_variables=["endpoint_name", "endpoint_description", "server_response", "user_prompt"]
+            )
     
     def process_prompt(self, prompt: str, api_key: str, context: Optional[Dict] = None):
         if context is None:
@@ -735,12 +747,21 @@ class EndpointAgent:
         # Step 6: Handle the selected endpoint
         if best_endpoint.get("endpoint_type") == "frontend":
             logging.info("Returning frontend endpoint URL.")
+            formatted_response = self.llm.invoke(self.response_creation_prompt.format(
+                endpoint_name=best_endpoint.get("name", ""),
+                endpoint_description=best_endpoint.get("description", ""),
+                user_prompt=prompt,
+                server_response=best_endpoint.get("url", "")
+            ))
+
             return {
                 "status": 200,
                 "endpoint_type": "frontend",
                 "url": best_endpoint.get("url", ""),
-                "description": best_endpoint.get("description", "")
+                "description": best_endpoint.get("description", ""), 
+                "formatted_response": str(formatted_response.content),
             }
+        
         else:
             # Step 7: Fill schema and send request for backend endpoint
             logging.info("Processing backend endpoint request.")
@@ -761,12 +782,20 @@ class EndpointAgent:
             response = self._send_request(best_endpoint, filled_schema)
             logging.debug(f"Response from backend: {response}")
 
+            formatted_response = self.llm.invoke(self.response_creation_prompt.format(
+                endpoint_name=best_endpoint.get("name", ""),
+                endpoint_description=best_endpoint.get("description", ""),
+                user_prompt=prompt,
+                server_response=response
+            ))
+
             return {
                 "status": 200,
                 "endpoint_type": "backend",
                 "endpoint_used": best_endpoint.get("name", "Unknown endpoint"),
                 "request_data": filled_schema,
-                "response": response
+                "response": response, 
+                "formatted_response": str(formatted_response.content),
             }
         
     
