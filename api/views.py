@@ -278,6 +278,31 @@ def update_frontend(request):
 
         if "folders" in data:
             update_data["folders"] = data["folders"]
+        
+        # New chat UI fields
+        if "aiText" in data:
+            update_data["aiText"] = data["aiText"]
+            
+        if "userText" in data:
+            update_data["userText"] = data["userText"]
+            
+        if "pageBackground" in data:
+            update_data["pageBackground"] = data["pageBackground"]
+            
+        if "aiMessageBackground" in data:
+            update_data["aiMessageBackground"] = data["aiMessageBackground"]
+            
+        if "userMessageBackground" in data:
+            update_data["userMessageBackground"] = data["userMessageBackground"]
+            
+        if "banner" in data:
+            update_data["banner"] = data["banner"]
+            
+        if "pageTitle" in data:
+            update_data["pageTitle"] = data["pageTitle"]
+            
+        if "startText" in data:
+            update_data["startText"] = data["startText"]
             
         # If nothing to update, return success
         if not update_data:
@@ -362,6 +387,7 @@ def frontend_details(request):
                 "frontend": {
                     "id": frontend['_id'],
                     "user_id": frontend['user_id'],
+                    # Original fields
                     "body": frontend.get('body', "#90F08C"),
                     "eyes": frontend.get('eyes', "#FFFFFF"),
                     "size": frontend.get('size', 12),
@@ -369,6 +395,15 @@ def frontend_details(request):
                     "url": frontend.get('url', ""),
                     "folders": frontend.get('folders', []),
                     "api_key": frontend.get('api_key'),
+                    # New chat UI fields
+                    "aiText": frontend.get('aiText', "#000000"),
+                    "userText": frontend.get('userText', "#000000"),
+                    "pageBackground": frontend.get('pageBackground', "#FFFFFF"),
+                    "aiMessageBackground": frontend.get('aiMessageBackground', "#F3F4F6"),
+                    "userMessageBackground": frontend.get('userMessageBackground', "#E5E7EB"),
+                    "banner": frontend.get('banner', "#90F08C"),
+                    "pageTitle": frontend.get('pageTitle', "Chat Assistant"),
+                    "startText": frontend.get('startText', "How can I help you today?"),
                 }
             }, status=200)
         else:
