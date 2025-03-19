@@ -193,6 +193,7 @@ def user_details(request):
                     "frontend": user.get('frontend'),
                     "backend": user.get('backend'),
                     "api_key": user.get('api_key'),
+                    "last_paid": user.get('last_paid').isoformat() if user.get('last_paid') else None,
                 }
             }, status=200)
         else:
@@ -203,6 +204,67 @@ def user_details(request):
 
     except Exception as error:
         print("Error fetching user details:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+    
+
+@csrf_exempt
+def update_emails(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        emails = data.get("emails")
+
+        # Validate the request data
+        if not user_id:
+            return JsonResponse(
+                {"message": "Invalid payload: Missing user_id"},
+                status=400
+            )
+        
+        if not emails or not isinstance(emails, list):
+            return JsonResponse(
+                {"message": "Invalid payload: emails must be a non-empty list"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Update the user's emails in the database
+        result = users_collection.update_one(
+            {"_id": object_id},
+            {"$set": {"emails": emails}}
+        )
+
+        if result.matched_count > 0:
+            if result.modified_count > 0:
+                return JsonResponse({
+                    "success": True,
+                    "message": "Emails updated successfully"
+                }, status=200)
+            else:
+                return JsonResponse({
+                    "success": True,
+                    "message": "No changes made to emails"
+                }, status=200)
+        else:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+
+    except Exception as error:
+        print("Error updating user emails:", error)
         return JsonResponse(
             {"message": "Internal Server Error", "error": str(error)},
             status=500
