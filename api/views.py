@@ -676,6 +676,15 @@ def public_frontend_details(request):
                     "url": frontend.get('url', ""),
                     "folders": frontend.get('folders', []),
                     "api_key": frontend.get('api_key'),
+                    # New chat UI fields
+                    "aiText": frontend.get('aiText', "#000000"),
+                    "userText": frontend.get('userText', "#000000"),
+                    "pageBackground": frontend.get('pageBackground', "#FFFFFF"),
+                    "aiMessageBackground": frontend.get('aiMessageBackground', "#F3F4F6"),
+                    "userMessageBackground": frontend.get('userMessageBackground', "#E5E7EB"),
+                    "banner": frontend.get('banner', "#90F08C"),
+                    "pageTitle": frontend.get('pageTitle', "Chat Assistant"),
+                    "startText": frontend.get('startText', "How can I help you today?"),
                 }
             }, status=200)
         else:
