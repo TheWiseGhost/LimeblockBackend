@@ -747,7 +747,7 @@ class EndpointAgent:
                 Available Endpoints:
                 {endpoints_json}
                 
-                Tell me which endpoint I should hit. 
+                If an endpoint matches my request, tell me which endpoint I should hit, if any at all (don't give an endpoint to hit if you aren't sure it fits my needs). 
                 
                 {format_instructions}
                 
@@ -785,6 +785,16 @@ class EndpointAgent:
                 have nothing about the endpoint used or its name or what was done to process the user's request. just give the useful info the user needs.
                 """,
                 input_variables=["endpoint_name", "endpoint_description", "server_response", "user_prompt"]
+            )
+
+            self.no_endpoint_response_creation_prompt = PromptTemplate(
+                template="""
+                Prompt: {user_prompt}
+
+                Give a message that responds to this given as a member of company {company_name}. If you don't know what to respond give a message that 
+                tells the user to check the docs or contact support or etc depending on the prompt. Make the message short and to the point. 
+                """,
+                input_variables=["company_name", "user_prompt"]
             )
     
     def process_prompt(self, prompt: str, api_key: str, context: Optional[Dict] = None):
@@ -850,7 +860,13 @@ class EndpointAgent:
 
         if not best_endpoint:
             logging.warning("No suitable endpoint found.")
-            return {"formatted_response": "I couldn't find a suitable endpoint for your request", "status": 200}
+
+            formatted_response = self.llm.invoke(self.no_endpoint_response_creation_prompt.format(
+                company_name=user.get("business_name"),
+                user_prompt=prompt,
+            ))
+
+            return {"formatted_response": str(formatted_response.content), "status": 200}
 
         logging.debug(f"Selected Endpoint: {json.dumps(best_endpoint, indent=2)}")
 
