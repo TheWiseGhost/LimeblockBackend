@@ -19,6 +19,7 @@ import pandas as pd
 import random
 import string
 import hashlib
+from dateutil.relativedelta import relativedelta
 
 client = MongoClient(f'{settings.MONGO_URI}')
 db = client['Limeblock']
@@ -1360,28 +1361,26 @@ def get_mau_stats(request):
 
         user = users_collection.find_one({"_id": ObjectId(user_id)})
         if not user or "mau_tracking" not in user:
-            return {"error": "No MAU data found"}
+            return JsonResponse({"error": "No MAU data found"}, status=404)
         
         # Get the current month and previous months
         current_date = datetime.datetime.now()
         month_stats = {}
-        
+
         for i in range(months):
-            month_date = current_date.replace(day=1) - timedelta(days=i*30)
+            month_date = current_date.replace(day=1) - relativedelta(months=i)
             month_key = month_date.strftime("%Y-%m")
             
             # Get MAU count for this month
-            if month_key in user["mau_tracking"] and month_key in user["mau_count"]:
-                month_stats[month_key] = user["mau_count"][month_key]
-            else:
-                month_stats[month_key] = 0
-        
+            month_stats[month_key] = user.get("mau_count", {}).get(month_key, 0)
+
         return JsonResponse(
-                {"success": True, "mau_stats": month_stats},
-                status=200
-            )
+            {"success": True, "mau_stats": month_stats},
+            status=200
+        )
+
     except Exception as error:
-         return JsonResponse(
+        return JsonResponse(
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
