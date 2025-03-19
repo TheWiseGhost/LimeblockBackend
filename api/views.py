@@ -709,7 +709,7 @@ from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import PromptTemplate
 from langchain_deepseek import ChatDeepSeek
 
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 class EndpointSelection(BaseModel):
     endpoint_name: str = Field(description="Name of the selected endpoint")
@@ -778,7 +778,8 @@ class EndpointAgent:
 
                 Response from server: {server_response}
 
-                Give a message that sums this up. 
+                Give a message that sums this up without any URL links just the URL text itself if needed and make it short and to the point and 
+                have nothing about the endpoint used or its name or what was done to process the user's request. just give the useful info the user needs.
                 """,
                 input_variables=["endpoint_name", "endpoint_description", "server_response", "user_prompt"]
             )
@@ -853,6 +854,10 @@ class EndpointAgent:
         # Step 6: Handle the selected endpoint
         if best_endpoint.get("endpoint_type") == "frontend":
             logging.info("Returning frontend endpoint URL.")
+            # print("BEST_ENDPOINT_NAME: " + best_endpoint.get("name", ""))
+            # print("BEST_ENDPOINT_DESC: " + best_endpoint.get("description", ""))
+            # print("USER_PROMPT: " + prompt)
+            # print("SERVER_RESPONSE: " + best_endpoint.get("url"))
             formatted_response = self.llm.invoke(self.response_creation_prompt.format(
                 endpoint_name=best_endpoint.get("name", ""),
                 endpoint_description=best_endpoint.get("description", ""),
