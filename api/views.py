@@ -836,11 +836,11 @@ class EndpointAgent:
 
         for endpoint in frontend_endpoints:
             endpoint["endpoint_type"] = "frontend"
-            all_endpoints.append(endpoint)
+            all_endpoints.append(endpoint)  
 
         if not all_endpoints:
             logging.error("No endpoints available in configuration.")
-            return {"message": "No endpoints available in your configuration", "status": 200}
+            return {"formatted_response": "No endpoints available in your configuration", "status": 200}
 
         logging.debug(f"Total available endpoints: {json.dumps(all_endpoints, indent=2)}")
 
@@ -849,7 +849,7 @@ class EndpointAgent:
 
         if not best_endpoint:
             logging.warning("No suitable endpoint found.")
-            return {"message": "I couldn't find a suitable endpoint for your request", "status": 200}
+            return {"formatted_response": "I couldn't find a suitable endpoint for your request", "status": 200}
 
         logging.debug(f"Selected Endpoint: {json.dumps(best_endpoint, indent=2)}")
 
@@ -860,6 +860,19 @@ class EndpointAgent:
             # print("BEST_ENDPOINT_DESC: " + best_endpoint.get("description", ""))
             # print("USER_PROMPT: " + prompt)
             # print("SERVER_RESPONSE: " + best_endpoint.get("url"))
+
+            # print("BEST_ENDPOINT_ID: " + best_endpoint.get("id", ""))
+            # print("BEST_ENDPOINT_FOLDER_ID: " + best_endpoint.get("folder_id", ""))
+
+            frontend_collection.update_one(
+                {"_id": ObjectId(frontend_id), "folders.id": best_endpoint.get("folder_id", ""), "folders.endpoints.id": best_endpoint.get("id", "")},
+                {"$inc": {"folders.$[folder].endpoints.$[endpoint].num_hits": 1}},
+                array_filters=[
+                    {"folder.id": best_endpoint.get("folder_id", "")},
+                    {"endpoint.id": best_endpoint.get("id", "")}
+                ]
+             )
+
             formatted_response = self.llm.invoke(self.response_creation_prompt.format(
                 endpoint_name=best_endpoint.get("name", ""),
                 endpoint_description=best_endpoint.get("description", ""),
@@ -895,6 +908,15 @@ class EndpointAgent:
             response = self._send_request(best_endpoint, filled_schema)
             logging.debug(f"Response from backend: {response}")
 
+            backend_collection.update_one(
+                {"_id": ObjectId(backend_id), "folders.id": best_endpoint.get("folder_id", ""), "folders.endpoints.id": best_endpoint.get("id", "")},
+                {"$inc": {"folders.$[folder].endpoints.$[endpoint].num_hits": 1}},
+                array_filters=[
+                    {"folder.id": best_endpoint.get("folder_id", "")},
+                    {"endpoint.id": best_endpoint.get("id", "")}
+                ]
+             )  
+
             formatted_response = self.llm.invoke(self.response_creation_prompt.format(
                 endpoint_name=best_endpoint.get("name", ""),
                 endpoint_description=best_endpoint.get("description", ""),
@@ -925,8 +947,10 @@ class EndpointAgent:
         # Process each folder
         for folder in folders:
             folder_endpoints = folder.get("endpoints", [])
+            folder_id = folder.get("id", "")
             for endpoint in folder_endpoints:
                 if "name" in endpoint and "url" in endpoint and "schema" in endpoint:
+                    endpoint['folder_id'] = folder_id
                     endpoints.append(endpoint)
         
         return endpoints
@@ -944,9 +968,10 @@ class EndpointAgent:
         # Process each folder
         for folder in folders:
             folder_endpoints = folder.get("endpoints", [])
+            folder_id = folder.get("id", "")
             for endpoint in folder_endpoints:
                 if "name" in endpoint and "url" in endpoint:
-                    # Frontend endpoints have description instead of schema
+                    endpoint['folder_id'] = folder_id
                     endpoints.append(endpoint)
         
         return endpoints
@@ -1328,31 +1353,38 @@ def get_mau_stats(request):
     Returns:
         dict: Monthly MAU statistics
     """
-    data = json.loads(request.body)
-    user_id = data.get("user_id")
-    months = data.get("months", 6)
+    try:
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        months = data.get("months", 6)
 
-    user = users_collection.find_one({"_id": ObjectId(user_id)})
-    if not user or "mau_tracking" not in user:
-        return {"error": "No MAU data found"}
-    
-    # Get the current month and previous months
-    current_date = datetime.datetime.now()
-    month_stats = {}
-    
-    for i in range(months):
-        month_date = current_date.replace(day=1) - timedelta(days=i*30)
-        month_key = month_date.strftime("%Y-%m")
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user or "mau_tracking" not in user:
+            return {"error": "No MAU data found"}
         
-        # Get MAU count for this month
-        if month_key in user["mau_tracking"]:
-            month_stats[month_key] = len(user["mau_tracking"][month_key])
-        else:
-            month_stats[month_key] = 0
-    
-    return {
-        "mau_stats": month_stats
-    }
+        # Get the current month and previous months
+        current_date = datetime.datetime.now()
+        month_stats = {}
+        
+        for i in range(months):
+            month_date = current_date.replace(day=1) - timedelta(days=i*30)
+            month_key = month_date.strftime("%Y-%m")
+            
+            # Get MAU count for this month
+            if month_key in user["mau_tracking"] and month_key in user["mau_count"]:
+                month_stats[month_key] = user["mau_count"][month_key]
+            else:
+                month_stats[month_key] = 0
+        
+        return JsonResponse(
+                {"success": True, "mau_stats": month_stats},
+                status=200
+            )
+    except Exception as error:
+         return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
 
 
 # STRIPE CHECKOUT STUFF

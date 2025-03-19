@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import main, create_user, sign_in, user_details, update_frontend, frontend_details, update_backend, backend_details, process_prompt, public_frontend_details
-from .views import create_checkout_session, stripe_webhook, update_emails
+from .views import create_checkout_session, stripe_webhook, update_emails, get_mau_stats
 
 urlpatterns = [
     path('', main, name='main'),
@@ -16,5 +16,6 @@ urlpatterns = [
     path("create_checkout_session/", create_checkout_session, name="create_checkout_session"),
     path("stripe/webhook/", stripe_webhook, name="stripe-webhook"),
     path('update_emails/', update_emails, name='update_emails'),
+    path('get_mau_stats/', get_mau_stats, name='get_mau_stats'),
 ]
 
