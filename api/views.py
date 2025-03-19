@@ -18,6 +18,7 @@ import stripe
 import pandas as pd
 import random
 import string
+import hashlib
 
 client = MongoClient(f'{settings.MONGO_URI}')
 db = client['Limeblock']
@@ -66,6 +67,7 @@ def create_user(request):
             "created_at": datetime.datetime.today(),
             "plan": "free",
             "api_key": api_key,
+            "mau_tracking": {},
         }
 
         # Insert the user into the Users collection
@@ -1187,13 +1189,23 @@ def process_prompt(request):
         data = json.loads(request.body)
         prompt = data.get("prompt")
         api_key = data.get("api_key")
-        context = data.get("context")
+        context = data.get("context", {})
+        
+        # Extract client_info from context if it exists
+        client_info = context.get("client_info", {})
+        if not client_info and "client_info" in data:
+            client_info = data.get("client_info", {})
         
         if not prompt or not api_key:
             return JsonResponse(
                 {"message": "Missing prompt or API key"},
                 status=400
             )
+        
+        # Track MAU if client_info is available
+        if client_info:
+            is_new_mau = update_mau(api_key, client_info)
+            logging.info(f"MAU tracking: client is {'new' if is_new_mau else 'returning'} for this month")
         
         # Initialize the agent
         agent = EndpointAgent(
@@ -1219,6 +1231,129 @@ def process_prompt(request):
             status=500
         )
     
+
+
+def update_mau(api_key, client_info):
+    """
+    Updates the Monthly Active Users (MAU).
+    
+    Args:
+        users_collection: MongoDB collection containing user data
+        api_key: API key
+        client_info: Dictionary containing client identification information
+    
+    Returns:
+        bool: True if the client is a new MAU for the current month, False otherwise
+    """
+    try:
+        # Get current month and year for MAU tracking
+        current_month = datetime.datetime.now().strftime("%Y-%m")
+        
+        # Extract client fingerprint or create one from available data
+        fingerprint = client_info.get("fingerprint")
+        if not fingerprint and client_info:
+            # Create a fingerprint from available client data if not provided
+            components = [
+                client_info.get("user_agent", ""),
+                client_info.get("language", ""),
+                client_info.get("screen_resolution", ""),
+                client_info.get("timezone", ""),
+                client_info.get("hostname", ""),
+                client_info.get("referrer", "")
+            ]
+            fingerprint = hashlib.sha256('|'.join(components).encode()).hexdigest()
+        
+        if not fingerprint:
+            logging.warning("No client fingerprint available for MAU tracking")
+            return False
+            
+        # Find the user document by API key
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.warning(f"No user found with API key: {api_key}")
+            return False
+        
+        # Initialize MAU tracking structure if it doesn't exist
+        if "mau_tracking" not in user:
+            users_collection.update_one(
+                {"api_key": api_key},
+                {"$set": {"mau_tracking": {}}}
+            )
+            user["mau_tracking"] = {}
+            
+        # Initialize current month's tracking if it doesn't exist
+        if current_month not in user["mau_tracking"]:
+            users_collection.update_one(
+                {"api_key": api_key},
+                {"$set": {f"mau_tracking.{current_month}": []}}
+            )
+            user["mau_tracking"][current_month] = []
+        
+        # Check if this client is already counted in the current month
+        if fingerprint in user["mau_tracking"][current_month]:
+            return False  # Not a new MAU
+        
+        # Add the client to the current month's MAU list
+        users_collection.update_one(
+            {"api_key": api_key},
+            {"$push": {f"mau_tracking.{current_month}": fingerprint}}
+        )
+        
+        # Increment the MAU counter
+        # Maintain a counter separate from the array for quick access
+        current_count = user.get("mau_count", {}).get(current_month, 0)
+        users_collection.update_one(
+            {"api_key": api_key},
+            {"$set": {f"mau_count.{current_month}": current_count + 1}}
+        )
+        
+        return True  # New MAU added
+        
+    except Exception as e:
+        logging.error(f"Error updating MAU tracking: {traceback.format_exc()}")
+        return False
+    
+
+
+@csrf_exempt
+def get_mau_stats(request):
+    """
+    Get MAU statistics for a specific block over a number of months.
+    
+    Args:
+        users_collection: MongoDB collection containing user data
+        api_key: API key
+        months: Number of months to include in the statistics (default 6)
+    
+    Returns:
+        dict: Monthly MAU statistics
+    """
+    data = json.loads(request.body)
+    user_id = data.get("user_id")
+    months = data.get("months", 6)
+
+    user = users_collection.find_one({"_id": ObjectId(user_id)})
+    if not user or "mau_tracking" not in user:
+        return {"error": "No MAU data found"}
+    
+    # Get the current month and previous months
+    current_date = datetime.datetime.now()
+    month_stats = {}
+    
+    for i in range(months):
+        month_date = current_date.replace(day=1) - timedelta(days=i*30)
+        month_key = month_date.strftime("%Y-%m")
+        
+        # Get MAU count for this month
+        if month_key in user["mau_tracking"]:
+            month_stats[month_key] = len(user["mau_tracking"][month_key])
+        else:
+            month_stats[month_key] = 0
+    
+    return {
+        "mau_stats": month_stats
+    }
+
 
 # STRIPE CHECKOUT STUFF
 
