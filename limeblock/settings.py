@@ -27,11 +27,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['127.0.0.1', '76af-2600-1700-4880-efc0-cbf-3e51-554c-6c70.ngrok-free.app']
+ALLOWED_HOSTS = ['127.0.0.1', '76af-2600-1700-4880-efc0-cbf-3e51-554c-6c70.ngrok-free.app', 'limeblockbackend.onrender.com']
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "http://127.0.0.1:8000"
+    "http://127.0.0.1:8000",
+    "https://limeblockbackend.onrender.com",
+    "https://limeblock.vercel.app"
 ]
 
 
