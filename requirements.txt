@@ -1,7 +1,6 @@
 Django
 djangorestframework
 pymongo
-bson
 requests
 stripe
 pandas
@@ -11,5 +10,4 @@ python-dotenv
 langchain
 langchain-deepseek
 pydantic
-logging
 gunicorn  
