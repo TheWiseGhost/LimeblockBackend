@@ -1,0 +1,15 @@
+Django
+djangorestframework
+pymongo
+bson
+requests
+stripe
+pandas
+python-dateutil
+django-cors-headers
+python-dotenv
+langchain
+langchain-deepseek
+pydantic
+logging
+gunicorn  
