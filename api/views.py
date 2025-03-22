@@ -1427,8 +1427,8 @@ def create_checkout_session(request):
 
             # Product price mapping for recurring subscriptions
             product_to_price_mapping = {
-                "prod_RvtLgN1zOEG6iD": "price_1R21YdEK41Y7N6vui07ggvAY",
-                "prod_RvtL5HMB98eLLm": "price_1R21Z5EK41Y7N6vuuu4c44kW"
+                "prod_RzHMsNHXCLy0o6": "price_1R5IoACZciU921ANPdW464Lu",
+                "prod_RzHNbu0fjuTZlu": "price_1R5IopCZciU921ANN1aJUJ3B"
             }
 
             if product_id not in product_to_price_mapping:
@@ -1524,7 +1524,7 @@ def handle_checkout_session(session):
         print(f"User not found: {user_id}")
         return
 
-    if product_id == "prod_RvtLgN1zOEG6iD":
+    if product_id == "prod_RzHMsNHXCLy0o6":
         try:
             users_collection.update_one({'_id': ObjectId(user_id)}, {
                 '$set': {'plan': 'startup', 'last_paid': datetime.datetime.today()}
@@ -1533,7 +1533,7 @@ def handle_checkout_session(session):
         except Exception as e:
             print(f"Failed to update MongoDB: {e}")
     
-    elif product_id == "prod_RvtL5HMB98eLLm":
+    elif product_id == "prod_RzHNbu0fjuTZlu":
         try:
             users_collection.update_one({'_id': ObjectId(user_id)}, {
                 '$set': {'plan': 'enterprise', 'last_paid': datetime.datetime.today()}
