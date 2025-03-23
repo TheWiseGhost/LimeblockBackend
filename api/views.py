@@ -921,33 +921,35 @@ class EndpointAgent:
 
             logging.debug(f"Filled schema: {json.dumps(filled_schema, indent=2)}")
 
-            # Step 8: Send request
-            response = self._send_request(best_endpoint, filled_schema)
-            logging.debug(f"Response from backend: {response}")
+            # # Step 8: Send request
+            # response = self._send_request(best_endpoint, filled_schema)
+            # logging.debug(f"Response from backend: {response}")
 
-            backend_collection.update_one(
-                {"_id": ObjectId(backend_id), "folders.id": best_endpoint.get("folder_id", ""), "folders.endpoints.id": best_endpoint.get("id", "")},
-                {"$inc": {"folders.$[folder].endpoints.$[endpoint].num_hits": 1}},
-                array_filters=[
-                    {"folder.id": best_endpoint.get("folder_id", "")},
-                    {"endpoint.id": best_endpoint.get("id", "")}
-                ]
-             )  
+            # backend_collection.update_one(
+            #     {"_id": ObjectId(backend_id), "folders.id": best_endpoint.get("folder_id", ""), "folders.endpoints.id": best_endpoint.get("id", "")},
+            #     {"$inc": {"folders.$[folder].endpoints.$[endpoint].num_hits": 1}},
+            #     array_filters=[
+            #         {"folder.id": best_endpoint.get("folder_id", "")},
+            #         {"endpoint.id": best_endpoint.get("id", "")}
+            #     ]
+            #  )  
 
-            formatted_response = self.llm.invoke(self.response_creation_prompt.format(
-                endpoint_name=best_endpoint.get("name", ""),
-                endpoint_description=best_endpoint.get("description", ""),
-                user_prompt=prompt,
-                server_response=response
-            ))
+            # formatted_response = self.llm.invoke(self.response_creation_prompt.format(
+            #     endpoint_name=best_endpoint.get("name", ""),
+            #     endpoint_description=best_endpoint.get("description", ""),
+            #     user_prompt=prompt,
+            #     server_response=response
+            # ))
 
             return {
                 "status": 200,
                 "endpoint_type": "backend",
-                "endpoint_used": best_endpoint.get("name", "Unknown endpoint"),
-                "request_data": filled_schema,
-                "response": response, 
-                "formatted_response": str(formatted_response.content),
+                "endpoint": best_endpoint,
+                "schema": filled_schema,
+                "prompt": prompt,
+                "formatted_response": f"Please confirm this action to {best_endpoint.get('name', '')}.\nI am going to use this request data - {filled_schema}",
+                "confirm_needed": True,
+
             }
         
     
@@ -1273,6 +1275,75 @@ def process_prompt(request):
             status=500
         )
     
+
+
+@csrf_exempt
+def commit_backend_action(request):
+    try:
+        data = json.loads(request.body)
+        best_endpoint = data.get("endpoint")
+        schema = data.get("schema")
+        prompt = data.get("prompt")
+        api_key = data.get("api_key")
+        
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.error("User not found.")
+            return {"error": "User not found", "status": 404}
+
+        logging.debug(f"User found: {user}")
+
+        # Step 2: Get backend and frontend document IDs
+        backend_id = user.get("backend")
+
+        # Initialize the agent
+        agent = EndpointAgent(
+            users_collection=users_collection,
+            backend_collection=backend_collection,
+            frontend_collection=frontend_collection,
+            deepseek_api_key=f'{settings.DEEPSEEK_API_KEY}',
+        )
+
+        response = agent._send_request(best_endpoint, schema)
+        logging.debug(f"Response from backend: {response}")
+
+        backend_collection.update_one(
+            {"_id": ObjectId(backend_id), "folders.id": best_endpoint.get("folder_id", ""), "folders.endpoints.id": best_endpoint.get("id", "")},
+            {"$inc": {"folders.$[folder].endpoints.$[endpoint].num_hits": 1}},
+            array_filters=[
+                {"folder.id": best_endpoint.get("folder_id", "")},
+                {"endpoint.id": best_endpoint.get("id", "")}
+            ]
+        )  
+
+        formatted_response = agent.llm.invoke(agent.response_creation_prompt.format(
+            endpoint_name=best_endpoint.get("name", ""),
+            endpoint_description=best_endpoint.get("description", ""),
+            user_prompt=prompt,
+            server_response=response
+        ))
+
+        result = {
+            "status": 200,
+            "endpoint_type": "backend",
+            "endpoint_used": best_endpoint.get("name", "Unknown endpoint"),
+            "request_data": schema,
+            "response": response, 
+            "formatted_response": str(formatted_response.content),
+        }
+        
+        # Ensure we return 200 status even if no endpoint is found
+        if "status" in result and result["status"] != 200:
+            result_status = result.pop("status", 200)
+            return JsonResponse(result, status=result_status)
+        else:
+            return JsonResponse(result, status=200)
+    except Exception as error:
+        logging.error("process_prompt error: " + traceback.format_exc())
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
 
 
 def update_mau(api_key, client_info):
