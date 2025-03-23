@@ -183,6 +183,19 @@ def user_details(request):
         if user:
             # Convert ObjectId to string for JSON serialization
             user['_id'] = str(user['_id'])
+
+            last_paid = user.get("last_paid")
+        
+            # Define the time threshold (1.5 months ago)
+            time_threshold = datetime.datetime.today() - timedelta(days=45)
+
+            if not last_paid and not last_paid >= time_threshold:
+                # Update plan to 'free' in MongoDB
+                users_collection.update_one(
+                    {"_id": object_id},
+                    {"$set": {"plan": "free"}}
+                )
+                user['plan'] = "free"  # Reflect this in the response
             
             # Return user details (excluding password)
             return JsonResponse({
@@ -1471,6 +1484,68 @@ def get_mau_stats(request):
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
+
+
+
+@csrf_exempt
+def are_maus_remaining(request):
+    try:
+        data = json.loads(request.body)
+        api_key = data.get("api_key")
+
+        
+        if not api_key:
+            return JsonResponse(
+                {"message": "Missing API key"},
+                status=400
+            )
+        
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.error("User not found.")
+            return {"error": "User not found", "status": 404}
+
+        
+        current_date = datetime.datetime.now()
+
+        month_date = current_date.replace(day=1) - relativedelta(months=0)
+        month_key = month_date.strftime("%Y-%m")
+        
+        # Get MAU count for this month
+        curr_month_mau_count = user.get("mau_count", {}).get(month_key, 0)
+        
+        # Define the time threshold (1.5 months ago)
+        time_threshold = datetime.datetime.today() - timedelta(days=45)
+
+        last_paid = user.get("last_paid")
+
+        if not last_paid and not last_paid >= time_threshold:
+            # Update plan to 'free' in MongoDB
+            users_collection.update_one(
+                {"api_key": api_key},
+                {"$set": {"plan": "free"}}
+            )
+            user['plan'] = "free"  # Reflect this in the response
+
+        if user['plan'] == "enterprise":
+            user_maus = 5000
+        elif user['plan'] == "startup":
+            user_maus = 200
+        else:
+            user_maus = 10
+        
+        if (user_maus < curr_month_mau_count):
+            return JsonResponse({'valid': False}, status=200)
+        else:
+            return JsonResponse({'valid': True}, status=200)
+        
+    except Exception as error:
+        logging.error("process_prompt error: " + traceback.format_exc())
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+    
 
 
 # STRIPE CHECKOUT STUFF

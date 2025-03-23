@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import main, create_user, sign_in, user_details, update_frontend, frontend_details, update_backend, backend_details, process_prompt, public_frontend_details
-from .views import create_checkout_session, stripe_webhook, update_emails, get_mau_stats, commit_backend_action
+from .views import create_checkout_session, stripe_webhook, update_emails, get_mau_stats, commit_backend_action, are_maus_remaining
 
 urlpatterns = [
     path('', main, name='main'),
@@ -18,5 +18,6 @@ urlpatterns = [
     path('update_emails/', update_emails, name='update_emails'),
     path('get_mau_stats/', get_mau_stats, name='get_mau_stats'),
     path('commit_backend_action/', commit_backend_action, name='commit_backend_action'),
+    path('are_maus_remaining/', are_maus_remaining, name="are_maus_remaining"),
 ]
 
