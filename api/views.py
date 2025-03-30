@@ -1528,11 +1528,11 @@ def are_maus_remaining(request):
             user['plan'] = "free"  # Reflect this in the response
 
         if user['plan'] == "enterprise":
-            user_maus = 5000
+            user_maus = 1000
         elif user['plan'] == "startup":
-            user_maus = 200
+            user_maus = 100
         else:
-            user_maus = 10
+            user_maus = 20
         
         if (user_maus < curr_month_mau_count):
             return JsonResponse({'valid': False}, status=200)
@@ -1574,7 +1574,7 @@ def create_checkout_session(request):
             # Product price mapping for recurring subscriptions
             product_to_price_mapping = {
                 "prod_RzHMsNHXCLy0o6": "price_1R5IoACZciU921ANPdW464Lu",
-                "prod_RzHNbu0fjuTZlu": "price_1R5IopCZciU921ANN1aJUJ3B"
+                "prod_RzHNbu0fjuTZlu": "price_1R80saCZciU921ANSS7Qt3my"
             }
 
             if product_id not in product_to_price_mapping:
