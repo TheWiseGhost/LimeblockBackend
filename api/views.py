@@ -1569,7 +1569,7 @@ def create_checkout_session(request):
             print(user_id)
 
             if not user_id:
-                return JsonResponse({"url": "http://localhost:3000/"})
+                return JsonResponse({"url": "https://limeblock.io/"})
 
             # Product price mapping for recurring subscriptions
             product_to_price_mapping = {
@@ -1590,8 +1590,8 @@ def create_checkout_session(request):
                     }
                 ],
                 mode="subscription",  # Recurring subscription mode
-                success_url="http://localhost:3000/dashboard",
-                cancel_url="http://localhost:3000/dashboard",
+                success_url="https://limeblock.io/dashboard",
+                cancel_url="https://limeblock.io/dashboard",
                 metadata={
                     "user_id": user_id,  # Attach user ID as metadata
                     "product_id": product_id,  # Attach product ID as metadata
