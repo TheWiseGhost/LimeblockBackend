@@ -1527,7 +1527,7 @@ def are_maus_remaining(request):
             )
             user['plan'] = "free"  # Reflect this in the response
 
-        if user['plan'] == "enterprise":
+        if user['plan'] == "business":
             user_maus = 1000
         elif user['plan'] == "startup":
             user_maus = 100
@@ -1574,7 +1574,8 @@ def create_checkout_session(request):
             # Product price mapping for recurring subscriptions
             product_to_price_mapping = {
                 "prod_RzHMsNHXCLy0o6": "price_1R5IoACZciU921ANPdW464Lu",
-                "prod_RzHNbu0fjuTZlu": "price_1R80saCZciU921ANSS7Qt3my"
+                "prod_RzHNbu0fjuTZlu": "price_1R80saCZciU921ANSS7Qt3my",
+                "prod_S3HJuA15K2CkU6": "price_1R9AkkCZciU921ANZ7a4fCGl"
             }
 
             if product_id not in product_to_price_mapping:
@@ -1680,6 +1681,14 @@ def handle_checkout_session(session):
             print(f"Failed to update MongoDB: {e}")
     
     elif product_id == "prod_RzHNbu0fjuTZlu":
+        try:
+            users_collection.update_one({'_id': ObjectId(user_id)}, {
+                '$set': {'plan': 'business', 'last_paid': datetime.datetime.today()}
+            })
+            print(f"Added/Updated Business Plan to user {user_id}.")
+        except Exception as e:
+            print(f"Failed to update MongoDB: {e}")
+    elif product_id == "prod_S3HJuA15K2CkU6":
         try:
             users_collection.update_one({'_id': ObjectId(user_id)}, {
                 '$set': {'plan': 'enterprise', 'last_paid': datetime.datetime.today()}
