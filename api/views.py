@@ -1338,7 +1338,7 @@ def commit_backend_action(request):
 
         result = {
             "status": 200,
-            "endpoint_type": "backend",
+            "endpoint_type": "completed_backend",
             "endpoint_used": best_endpoint.get("name", "Unknown endpoint"),
             "request_data": schema,
             "response": response, 
