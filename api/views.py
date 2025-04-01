@@ -1531,8 +1531,10 @@ def are_maus_remaining(request):
             user_maus = 1000
         elif user['plan'] == "startup":
             user_maus = 100
+        elif user['plan'] == "enterprise":
+            user_maus = 5000
         else:
-            user_maus = 20
+            user_maus = 0
         
         if (user_maus < curr_month_mau_count):
             return JsonResponse({'valid': False}, status=200)
