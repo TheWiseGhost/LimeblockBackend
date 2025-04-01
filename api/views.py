@@ -189,13 +189,21 @@ def user_details(request):
             # Define the time threshold (1.5 months ago)
             time_threshold = datetime.datetime.today() - timedelta(days=45)
 
-            if not last_paid and not last_paid >= time_threshold:
+            if last_paid:
+                if last_paid >= time_threshold:
+                    # Update plan to 'free' in MongoDB
+                    users_collection.update_one(
+                        {"_id": object_id},
+                        {"$set": {"plan": "free"}}
+                    )
+                    user['plan'] = "free"  # Reflect this in the response
+            else:
                 # Update plan to 'free' in MongoDB
-                users_collection.update_one(
-                    {"_id": object_id},
-                    {"$set": {"plan": "free"}}
-                )
-                user['plan'] = "free"  # Reflect this in the response
+                    users_collection.update_one(
+                        {"_id": object_id},
+                        {"$set": {"plan": "free"}}
+                    )
+                    user['plan'] = "free"  # Reflect this in the response
             
             # Return user details (excluding password)
             return JsonResponse({
