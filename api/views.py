@@ -776,7 +776,9 @@ class EndpointAgent:
                 {schema_json}  
                
                 I want you to {user_prompt}, so change the schema json to fit what I am trying to do. Here is some context: {user_context}
-                Return a valid JSON object and nothing else. This schema is going to be sent to an endpoint called {endpoint_name} and it's described as {endpoint_description}
+                Return a valid JSON object and nothing else. This schema is going to be sent to an endpoint called {endpoint_name} and it's described as {endpoint_description}.
+                The instructions are {endpoint_instructions}
+
                 Fill in values surrounded by curly braces in schema like "user_id": "{{user_id}}" with things in the
                 context I gave you. 
 
@@ -784,7 +786,7 @@ class EndpointAgent:
 
                 If you don't think you can do this because you need more context from me or more instructions to fill the schema, please just message me back "I need this ---"
                 """,
-                input_variables=["endpoint_name", "endpoint_description", "schema_json", "user_prompt", "user_context"]
+                input_variables=["endpoint_name", "endpoint_description", "endpoint_instructions", "schema_json", "user_prompt", "user_context"]
             )
 
             self.response_creation_prompt = PromptTemplate(
@@ -1074,6 +1076,7 @@ class EndpointAgent:
         endpoints_json = json.dumps([{
             "name": ep.get("name", ""),
             "description": ep.get("description", ""),
+            "example_prompts": ep.get("examplePrompts", ""),
             "url": ep.get("url", ""),
             "type": ep.get("endpoint_type", "backend")  # Include the type
         } for ep in endpoints], indent=2)
@@ -1168,6 +1171,7 @@ class EndpointAgent:
             result = self.llm.invoke(self.schema_filling_prompt.format(
                 endpoint_name=endpoint.get("name", ""),
                 endpoint_description=endpoint.get("description", ""),
+                endpoint_instructions=endpoint.get("instructions", ""),
                 schema_json=schema_json,
                 user_prompt=prompt,
                 user_context=context_json
