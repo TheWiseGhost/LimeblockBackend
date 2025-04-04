@@ -962,7 +962,7 @@ class EndpointAgent:
                 "endpoint": best_endpoint,
                 "schema": filled_schema,
                 "prompt": prompt,
-                "formatted_response": f"Please confirm this action to {best_endpoint.get('name', '')}.\nI am going to use this request data - {filled_schema}",
+                "formatted_response": f"Please confirm this action to endpoint - {best_endpoint.get('name', '')}.\nIf you don't think this endpoint makes sense, the AI might have made a mistake. Actions may be irreversible.",
                 "confirm_needed": True,
 
             }
