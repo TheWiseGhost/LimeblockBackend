@@ -812,7 +812,7 @@ class EndpointAgent:
                 input_variables=["company_name", "user_prompt"]
             )
     
-    def process_prompt(self, prompt: str, api_key: str, context: Optional[Dict] = None):
+    def process_prompt(self, prompt: str, api_key: str, context: Optional[Dict] = None, option: Optional[str] = "Find Page"):
         if context is None:
             context = {}
 
@@ -850,23 +850,17 @@ class EndpointAgent:
             return {"error": "Configuration documents not found", "status": 404}
 
         # Step 4: Get all endpoints
-        backend_endpoints = self._get_all_endpoints(backend_config) if backend_config else []
-        frontend_endpoints = self._get_all_frontend_endpoints(frontend_config) if frontend_config else []
-
-        logging.debug(f"Retrieved {len(backend_endpoints)} backend endpoints and {len(frontend_endpoints)} frontend endpoints.")
-
         all_endpoints = []
-        for endpoint in backend_endpoints:
-            endpoint["endpoint_type"] = "backend"
-            all_endpoints.append(endpoint)
-
-        for endpoint in frontend_endpoints:
-            endpoint["endpoint_type"] = "frontend"
-            all_endpoints.append(endpoint)  
-
-        if not all_endpoints:
-            logging.error("No endpoints available in configuration.")
-            return {"formatted_response": "No endpoints available in your configuration", "status": 200}
+        if option == "Find Page":
+            frontend_endpoints = self._get_all_frontend_endpoints(frontend_config) if frontend_config else []
+            for endpoint in frontend_endpoints:
+                endpoint["endpoint_type"] = "frontend"
+                all_endpoints.append(endpoint)  
+        else:   
+            backend_endpoints = self._get_all_endpoints(backend_config) if backend_config else []
+            for endpoint in backend_endpoints:
+                endpoint["endpoint_type"] = "backend"
+                all_endpoints.append(endpoint)
 
         logging.debug(f"Total available endpoints: {json.dumps(all_endpoints, indent=2)}")
 
@@ -1251,6 +1245,7 @@ def process_prompt(request):
         prompt = data.get("prompt")
         api_key = data.get("api_key")
         context = data.get("context", {})
+        option = data.get("option", "Find Page")
         
         # Extract client_info from context if it exists
         client_info = context.get("client_info", {})
@@ -1277,7 +1272,7 @@ def process_prompt(request):
         )
         
         # Process the prompt
-        result = agent.process_prompt(prompt, api_key, context)
+        result = agent.process_prompt(prompt, api_key, context, option)
         
         # Ensure we return 200 status even if no endpoint is found
         if "status" in result and result["status"] != 200:
