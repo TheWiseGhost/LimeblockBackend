@@ -755,18 +755,18 @@ class EndpointAgent:
             # Create prompt templates
             self.endpoint_selection_prompt = PromptTemplate(
                 template="""
-                I want to {user_prompt} by hitting one the following endpoints. 
+                I want to {user_prompt} by hitting one the following endpoints with context {user_context}. 
                 
                 Available Endpoints:
                 {endpoints_json}
                 
-                If an endpoint matches my request, tell me which endpoint I should hit, if any at all (don't give an endpoint to hit if you aren't sure it fits my needs). 
+                If an endpoint matches my request and I have the context params for that endpoint, tell me that's the endpoint I should hit. Don't send me an endpoint if none match or I don't have enough context params, (don't give an endpoint to hit if you aren't sure it fits my needs). 
                 
                 {format_instructions}
                 
                 If none of the endpoints can fulfill the request, set suitable to false.
                 """,
-                input_variables=["endpoints_json", "user_prompt"],
+                input_variables=["endpoints_json", "user_prompt", "user_context"],
                 partial_variables={"format_instructions": self.endpoint_parser.get_format_instructions()}
             )
             
@@ -865,7 +865,7 @@ class EndpointAgent:
         logging.debug(f"Total available endpoints: {json.dumps(all_endpoints, indent=2)}")
 
         # Step 5: Find the best matching endpoint
-        best_endpoint = self._find_best_endpoint(prompt, all_endpoints)
+        best_endpoint = self._find_best_endpoint(prompt, context, all_endpoints)
 
         if not best_endpoint:
             logging.warning("No suitable endpoint found.")
@@ -1004,13 +1004,13 @@ class EndpointAgent:
         
         return endpoints
     
-    def _find_best_endpoint(self, prompt: str, endpoints: List[Dict]) -> Optional[Dict]:
+    def _find_best_endpoint(self, prompt: str, context: Dict, endpoints: List[Dict]) -> Optional[Dict]:
         """
         Find the best matching endpoint based on the user prompt
         """
         try:
             if self.has_llm:
-                result = self._find_endpoint_with_langchain(prompt, endpoints)
+                result = self._find_endpoint_with_langchain(prompt, context, endpoints)
                 if result:
                     return result
         except Exception as e:
@@ -1062,7 +1062,7 @@ class EndpointAgent:
         return None
     
 
-    def _find_endpoint_with_langchain(self, prompt: str, endpoints: List[Dict]) -> Optional[Dict]:
+    def _find_endpoint_with_langchain(self, prompt: str, context: Dict, endpoints: List[Dict]) -> Optional[Dict]:
         """
         Use LangChain and DeepSeek to find the best endpoint based on understanding the prompt
         """
@@ -1071,6 +1071,7 @@ class EndpointAgent:
             "name": ep.get("name", ""),
             "description": ep.get("description", ""),
             "example_prompts": ep.get("examplePrompts", ""),
+            "required_context_params": ep.get("requiredContextParams", ""),
             "url": ep.get("url", ""),
             "type": ep.get("endpoint_type", "backend")  # Include the type
         } for ep in endpoints], indent=2)
@@ -1079,7 +1080,8 @@ class EndpointAgent:
         try:
             result = self.llm.invoke(self.endpoint_selection_prompt.format(
                 endpoints_json=endpoints_json, 
-                user_prompt=prompt
+                user_prompt=prompt,
+                user_context=context
             ))
             
             # Parse the result
