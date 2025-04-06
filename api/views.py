@@ -857,7 +857,7 @@ class EndpointAgent:
                 endpoint["endpoint_type"] = "frontend"
                 all_endpoints.append(endpoint)  
         else:   
-            backend_endpoints = self._get_all_endpoints(backend_config) if backend_config else []
+            backend_endpoints = self._get_all_endpoints(backend_config, context) if backend_config else []
             for endpoint in backend_endpoints:
                 endpoint["endpoint_type"] = "backend"
                 all_endpoints.append(endpoint)
@@ -865,6 +865,9 @@ class EndpointAgent:
         logging.debug(f"Total available endpoints: {json.dumps(all_endpoints, indent=2)}")
 
         # Step 5: Find the best matching endpoint
+        # print("PROMPT:" + prompt)
+        # print("CONTEXT:" + str(context))
+        # print("ALL_ENDPOINTS" + str(all_endpoints))
         best_endpoint = self._find_best_endpoint(prompt, context, all_endpoints)
 
         if not best_endpoint:
@@ -962,25 +965,46 @@ class EndpointAgent:
             }
         
     
-    def _get_all_endpoints(self, backend_config: Dict) -> List[Dict]:
+    def _get_all_endpoints(self, backend_config: Dict, context: Dict = None) -> List[Dict]:
         """
-        Extract all endpoints from the backend configuration
+        Extract all endpoints from the backend configuration and check if context satisfies required parameters
+
+        Args:
+            backend_config: The backend configuration
+            context: The context dictionary containing parameters for endpoint calls
+            
+        Returns:
+            A list of endpoints with an additional field indicating if all required context parameters are present
         """
         if not backend_config:
             return []
             
+        if context is None:
+            context = {}
+            
         endpoints = []
         folders = backend_config.get("folders", [])
-        
+
         # Process each folder
         for folder in folders:
             folder_endpoints = folder.get("endpoints", [])
             folder_id = folder.get("id", "")
             for endpoint in folder_endpoints:
                 if "name" in endpoint and "url" in endpoint and "schema" in endpoint:
+                    # Add folder ID to the endpoint
                     endpoint['folder_id'] = folder_id
-                    endpoints.append(endpoint)
-        
+                    
+                    # Check if all required context parameters are present
+                    required_params = endpoint.get("requiredContextParams", [])
+                    has_all_params = True
+                    
+                    for param in required_params:
+                        if param not in context:
+                            has_all_params = False
+                    
+                    if has_all_params:
+                        endpoints.append(endpoint)
+
         return endpoints
     
     def _get_all_frontend_endpoints(self, frontend_config: Dict) -> List[Dict]:
@@ -1548,7 +1572,88 @@ def are_maus_remaining(request):
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
+
+
+@csrf_exempt
+def test_endpoint(request):
+    """
+    Django view function to test if an endpoint is accessible
     
+    Expected request JSON:
+    {
+        "endpoint_name": "name_of_endpoint",
+        "api_key": "user_api_key"
+    }
+    
+    Returns:
+        JsonResponse with test results
+    """
+    try:
+        data = json.loads(request.body)
+        target_endpoint = data.get("endpoint")
+        
+        if not target_endpoint:
+            return JsonResponse({
+                "success": False,
+                "message": f"Endpoint not recieved to test",
+                "error": f"Endpoint not recieved to test",
+                "status": 404
+            }, status=404)
+        
+        # Try to make a basic request to test accessibility
+        url = target_endpoint.get("url", "")
+        method = target_endpoint.get("method", "GET").upper()
+        
+        try:
+            import requests
+            
+            # Send a minimal request - just testing connectivity, not functionality
+            if method == "GET":
+                response = requests.get(url, timeout=5)
+            else:
+                # For non-GET methods, send an empty JSON payload
+                response = requests.request(method, url, json={}, timeout=5)
+            
+            # Check if the response indicates we have access (any response other than auth errors)
+            if response.status_code in [401, 403]:
+                return JsonResponse({
+                    "success": False,
+                    "error": f"Authentication failed with status code: {response.status_code}",
+                    "message": f"Authentication failed with status code: {response.status_code}",
+                    "status": response.status_code,
+                    "endpoint": target_endpoint.get("name", ""),
+                    "url": url
+                }, status=200)  # Still return HTTP 200 even though the test failed
+            else:
+                return JsonResponse({
+                    "success": True,
+                    "status": response.status_code,
+                    "endpoint": target_endpoint.get("name", ""),
+                    "url": url,
+                    "message": f"Endpoint is accessible (status code: {response.status_code})"
+                }, status=200)
+        except Exception as e:
+            return JsonResponse({
+                "success": False,
+                "error": f"Request failed: {str(e)}",
+                "endpoint": target_endpoint.get("name", ""),
+                "url": url
+            }, status=200)  # Still return HTTP 200 even though the test failed
+            
+    except json.JSONDecodeError:
+        return JsonResponse({
+            "success": False,
+            "error": "Invalid JSON in request body",
+            "status": 400
+        }, status=400)
+    except Exception as e:
+        logging.error(f"Error in test_endpoint: {traceback.format_exc()}")
+        return JsonResponse({
+            "success": False,
+            "error": f"Internal server error: {str(e)}",
+            "status": 500
+        }, status=500)
+
 
 
 # STRIPE CHECKOUT STUFF
