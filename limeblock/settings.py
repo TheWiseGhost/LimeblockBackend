@@ -27,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-# ALLOWED_HOSTS = ['127.0.0.1', '76af-2600-1700-4880-efc0-cbf-3e51-554c-6c70.ngrok-free.app', 'limeblockbackend.onrender.com', 'limeblock.io']
+# ALLOWED_HOSTS = ['127.0.0.1', 'faf6-2600-1700-4880-efc0-2dac-2bb-cfac-f200.ngrok-free.app', 'limeblockbackend.onrender.com', 'limeblock.io']
 ALLOWED_HOSTS = ['limeblockbackend.onrender.com', 'limeblock.io']
 
 # CORS_ALLOWED_ORIGINS = [

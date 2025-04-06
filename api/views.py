@@ -1573,7 +1573,15 @@ def create_checkout_session(request):
 
             if not user_id:
                 return JsonResponse({"url": "https://limeblock.io/"})
+            
+            user = users_collection.find_one({'_id': ObjectId(user_id)})
 
+            if not user:
+                return JsonResponse({"error": "User not found"}, status=404)
+            
+            # Get existing Stripe customer ID if available
+            stripe_customer_id = user.get('stripe_customer_id')
+            
             # Product price mapping for recurring subscriptions
             product_to_price_mapping = {
                 "prod_RzHMsNHXCLy0o6": "price_1R5IoACZciU921ANPdW464Lu",
@@ -1584,29 +1592,36 @@ def create_checkout_session(request):
             if product_id not in product_to_price_mapping:
                 return JsonResponse({"error": "Invalid Product ID"}, status=400)
 
-            # Create a Stripe Checkout Session for recurring payments
-            session = stripe.checkout.Session.create(
-                payment_method_types=["card"],
-                line_items=[
+            # Session parameters
+            session_params = {
+                "payment_method_types": ["card"],
+                "line_items": [
                     {
                         "price": product_to_price_mapping[product_id],
                         "quantity": 1,
                     }
                 ],
-                mode="subscription",  # Recurring subscription mode
-                success_url="https://limeblock.io/dashboard",
-                cancel_url="https://limeblock.io/dashboard",
-                metadata={
+                "mode": "subscription",  # Recurring subscription mode
+                "success_url": "https://limeblock.io/dashboard",
+                "cancel_url": "https://limeblock.io/dashboard",
+                "metadata": {
                     "user_id": user_id,  # Attach user ID as metadata
                     "product_id": product_id,  # Attach product ID as metadata
                 },
-                subscription_data={
+                "subscription_data": {
                     "metadata": {
                         "user_id": user_id,
                         "product_id": product_id,
                     }
                 }
-            )
+            }
+            
+            # Only add the customer ID if it exists
+            if stripe_customer_id:
+                session_params["customer"] = stripe_customer_id
+
+            # Create a Stripe Checkout Session
+            session = stripe.checkout.Session.create(**session_params)
 
             return JsonResponse({"url": session.url})
 
@@ -1631,73 +1646,156 @@ def stripe_webhook(request):
         return JsonResponse({'error': 'Invalid signature'}, status=400)
 
     # Handle checkout.session.completed
-    if event["type"] == "checkout.session.completed" or event["type"] == "invoice.paid":
+    if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         handle_checkout_session(session)
+    # Handle subscription events
+    elif event["type"] == "invoice.paid":
+        invoice = event["data"]["object"]
+        handle_invoice_paid(invoice)
+    elif event["type"] == "customer.subscription.created":
+        subscription = event["data"]["object"]
+        handle_subscription_created(subscription)
 
     return JsonResponse({"status": "success"}, status=200)
 
 
 def handle_checkout_session(session):
     """
-    Processes the checkout session or invoice payment.
+    Processes the checkout session.
     """
-    # Check if this is a checkout session or invoice
-    if 'metadata' in session and session.get('metadata'):
-        # This is a checkout.session.completed event
-        user_id = session["metadata"].get("user_id")
-        product_id = session["metadata"].get("product_id")
-    elif session.get('subscription'):
-        # This is an invoice.paid event
-        try:
-            # Get the subscription to access metadata
-            subscription = stripe.Subscription.retrieve(session.get('subscription'))
-            # Get metadata from the subscription
-            user_id = subscription.metadata.get('user_id')
-            product_id = subscription.metadata.get('product_id')
-        except Exception as e:
-            print(f"Error retrieving subscription data: {e}")
+    # Extract metadata from session
+    user_id = session["metadata"].get("user_id")
+    product_id = session["metadata"].get("product_id")
+    
+    if not user_id or not product_id:
+        print("Missing required metadata in checkout session")
+        return
+
+    print(f"User {user_id} initiated checkout for product {product_id}")
+    
+    try:
+        # Get the user
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        
+        if not user:
+            print(f"User not found: {user_id}")
             return
-    else:
-        print("Missing required data in session")
-        return
         
-    print("handling payment...")
-
-    if not user_id:
-        print("no user id")
-        return
+        # Check if user already has a Stripe customer ID
+        stripe_customer_id = user.get('stripe_customer_id')
         
-    user = users_collection.find_one({'_id': ObjectId(user_id)})
+        # If no Stripe customer ID exists, create one now
+        if not stripe_customer_id:
+            # Get the customer from the session
+            customer_id = session.get('customer')
+            
+            if not customer_id:
+                # Create a new customer if not available in session
+                customer = stripe.Customer.create(
+                    name=user.get('business_name', str(user['_id'])),
+                    metadata={"user_id": str(user['_id'])}
+                )
+                stripe_customer_id = customer.id
+            else:
+                stripe_customer_id = customer_id
+                
+            # Save the customer ID to the user record
+            users_collection.update_one(
+                {'_id': ObjectId(user_id)},
+                {'$set': {'stripe_customer_id': stripe_customer_id}}
+            )
+            print(f"Created Stripe customer {stripe_customer_id} for user {user_id}")
     
-    if not user:
-        print(f"User not found: {user_id}")
-        return
+    except Exception as e:
+        print(f"Error processing checkout session: {e}")
 
-    if product_id == "prod_RzHMsNHXCLy0o6":
-        try:
-            users_collection.update_one({'_id': ObjectId(user_id)}, {
-                '$set': {'plan': 'startup', 'last_paid': datetime.datetime.today()}
-            })
-            print(f"Added/Updated Startup Plan to user {user_id}.")
-        except Exception as e:
-            print(f"Failed to update MongoDB: {e}")
+
+def handle_invoice_paid(invoice):
+    """
+    Processes the invoice paid event.
+    """
+    subscription_id = invoice.get('subscription')
+    if not subscription_id:
+        print("No subscription found in invoice")
+        return
     
-    elif product_id == "prod_RzHNbu0fjuTZlu":
-        try:
-            users_collection.update_one({'_id': ObjectId(user_id)}, {
-                '$set': {'plan': 'business', 'last_paid': datetime.datetime.today()}
-            })
-            print(f"Added/Updated Business Plan to user {user_id}.")
-        except Exception as e:
-            print(f"Failed to update MongoDB: {e}")
-    elif product_id == "prod_S3HJuA15K2CkU6":
-        try:
-            users_collection.update_one({'_id': ObjectId(user_id)}, {
-                '$set': {'plan': 'enterprise', 'last_paid': datetime.datetime.today()}
-            })
-            print(f"Added/Updated Enterprise Plan to user {user_id}.")
-        except Exception as e:
-            print(f"Failed to update MongoDB: {e}")
-    else:
-        print(f"Unknown product ID: {product_id}")
+    try:
+        # Get the subscription to access metadata
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        
+        # Get metadata from the subscription
+        user_id = subscription.metadata.get('user_id')
+        product_id = subscription.metadata.get('product_id')
+        
+        if not user_id or not product_id:
+            print("Missing required metadata in subscription")
+            return
+            
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        
+        if not user:
+            print(f"User not found: {user_id}")
+            return
+            
+        update_user_plan(user_id, product_id)
+        
+    except Exception as e:
+        print(f"Error handling invoice paid: {e}")
+
+
+def handle_subscription_created(subscription):
+    """
+    Handles the subscription.created event.
+    """
+    user_id = subscription.metadata.get('user_id')
+    customer_id = subscription.customer
+    
+    if not user_id or not customer_id:
+        print("Missing required data in subscription")
+        return
+    
+    try:
+        # Cancel old subscriptions for this user
+        customer = stripe.Customer.retrieve(customer_id)
+        subscriptions = stripe.Subscription.list(customer=customer_id, status='active')
+        
+        new_subscription_id = subscription.id
+        
+        for sub in subscriptions.auto_paging_iter():
+            # Don't cancel the newly created subscription
+            if sub.id != new_subscription_id:
+                stripe.Subscription.delete(sub.id)
+                print(f"Cancelled old subscription {sub.id} for user {user_id}")
+                
+    except Exception as e:
+        print(f"Error cancelling old subscriptions: {e}")
+
+
+def update_user_plan(user_id, product_id):
+    """
+    Updates the user's plan in the database.
+    """
+    print(f"Updating plan for user {user_id} to product {product_id}")
+    
+    try:
+        plan_type = None
+        if product_id == "prod_RzHMsNHXCLy0o6":
+            plan_type = "startup"
+        elif product_id == "prod_RzHNbu0fjuTZlu":
+            plan_type = "business"
+        elif product_id == "prod_S551gYSiT7y2BK":
+            plan_type = "enterprise"
+        else:
+            print(f"Unknown product ID: {product_id}")
+            return
+            
+        # Update the user's plan in the database
+        users_collection.update_one(
+            {'_id': ObjectId(user_id)}, 
+            {'$set': {'plan': plan_type, 'last_paid': datetime.datetime.today()}}
+        )
+        print(f"Updated user {user_id} to {plan_type} plan")
+        
+    except Exception as e:
+        print(f"Failed to update user plan: {e}")
