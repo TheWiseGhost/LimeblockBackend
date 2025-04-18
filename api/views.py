@@ -20,6 +20,7 @@ import random
 import string
 import hashlib
 from dateutil.relativedelta import relativedelta
+import uuid
 
 client = MongoClient(f'{settings.MONGO_URI}')
 db = client['Limeblock']
@@ -412,6 +413,400 @@ def update_frontend(request):
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
+
+    
+"""
+Example request schema for add_new_folder_and_page:
+{
+    "user_id": "{user_id}",
+    "folder_name": "Documentation",
+    "page": {
+        "name": "Getting Started",
+        "url": "https://docs.example.com/getting-started",
+        "description": "Introduction to the platform and setup instructions"
+    }
+}
+"""
+@csrf_exempt
+def add_new_folder_and_page(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_name = data.get("folder_name")
+        page_data = data.get("page")
+
+        # Validate required fields
+        if not all([user_id, folder_name, page_data]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_name, and page data"},
+                status=400
+            )
+
+        # Validate page data has required fields
+        if not all(key in page_data for key in ["name", "url", "description"]):
+            return JsonResponse(
+                {"message": "Page data missing required fields: name, url, description"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their frontend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        frontend_id = user.get("frontend")
+        if not frontend_id:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            frontend_object_id = ObjectId(frontend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid frontend ID format"},
+                status=400
+            )
+            
+        # Get existing frontend info
+        frontend = frontend_collection.find_one({"_id": frontend_object_id})
+        if not frontend:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found"},
+                status=404
+            )
+            
+        # Generate a unique ID for the new folder
+        folder_id = f"folder_{uuid.uuid4().hex}"
+        
+        # Generate a unique ID for the new page
+        page_id = f"page_{uuid.uuid4().hex}"
+        
+        # Create new folder with page
+        new_folder = {
+            "id": folder_id,
+            "name": folder_name,
+            "pages": [{
+                "id": page_id,
+                "name": page_data["name"],
+                "url": page_data["url"],
+                "description": page_data["description"]
+            }]
+        }
+        
+        # Get existing folders or initialize empty array
+        folders = frontend.get("folders", [])
+        
+        # Add the new folder
+        folders.append(new_folder)
+        
+        # Update the frontend document
+        result = frontend_collection.update_one(
+            {"_id": frontend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Folder and page added successfully",
+                "folder_id": folder_id,
+                "page_id": page_id
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": False, "message": "Failed to update frontend"},
+                status=500
+            )
+    
+    except Exception as error:
+        print("Error adding folder and page:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
+
+
+"""
+Example request schema for add_new_page:
+{
+    "user_id": "6f7c232d307e0b2e1c17d27",
+    "folder_id": "folder_1743696478d81",
+    "page": {
+        "name": "API Reference",
+        "url": "https://docs.example.com/api-reference",
+        "description": "Complete API documentation with examples"
+    }
+}
+"""
+@csrf_exempt
+def add_new_page(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_id = data.get("folder_id")
+        page_data = data.get("page")
+
+        # Validate required fields
+        if not all([user_id, folder_id, page_data]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_id, and page data"},
+                status=400
+            )
+
+        # Validate page data has required fields
+        if not all(key in page_data for key in ["name", "url", "description"]):
+            return JsonResponse(
+                {"message": "Page data missing required fields: name, url, description"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their frontend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        frontend_id = user.get("frontend")
+        if not frontend_id:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            frontend_object_id = ObjectId(frontend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid frontend ID format"},
+                status=400
+            )
+            
+        # Get existing frontend info
+        frontend = frontend_collection.find_one({"_id": frontend_object_id})
+        if not frontend:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found"},
+                status=404
+            )
+            
+        # Get existing folders
+        folders = frontend.get("folders", [])
+        
+        # Find the specified folder
+        folder_index = next((i for i, folder in enumerate(folders) if folder.get("id") == folder_id), None)
+        
+        if folder_index is None:
+            return JsonResponse(
+                {"warning": f"Folder with ID {folder_id} not found"},
+                status=404
+            )
+            
+        # Generate a unique ID for the new page
+        page_id = f"page_{uuid.uuid4().hex}"
+        
+        # Create new page
+        new_page = {
+            "id": page_id,
+            "name": page_data["name"],
+            "url": page_data["url"],
+            "description": page_data["description"]
+        }
+        
+        # Get existing pages or initialize empty array
+        pages = folders[folder_index].get("pages", [])
+        
+        # Add the new page
+        pages.append(new_page)
+        
+        # Update the folder's pages
+        folders[folder_index]["pages"] = pages
+        
+        # Update the frontend document
+        result = frontend_collection.update_one(
+            {"_id": frontend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Page added successfully",
+                "page_id": page_id
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": False, "message": "Failed to update frontend"},
+                status=500
+            )
+    
+    except Exception as error:
+        print("Error adding page:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
+
+"""
+Example request schema for edit_page:
+{
+    "user_id": "6f7c232d307e0b2e1c17d27",
+    "folder_id": "folder_1743696478d81",
+    "page_id": "page_1743694957289",
+    "page_updates": {
+        "name": "Updated Documentation",
+        "url": "https://docs.example.com/v2/documentation",
+        "description": "Revised documentation with new examples and clearer instructions"
+    }
+}
+"""
+@csrf_exempt
+def edit_page(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_id = data.get("folder_id")
+        page_id = data.get("page_id")
+        page_updates = data.get("page_updates")
+
+        # Validate required fields
+        if not all([user_id, folder_id, page_id, page_updates]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_id, page_id, and page_updates"},
+                status=400
+            )
+
+        # Validate at least one field is being updated
+        valid_update_fields = ["name", "url", "description"]
+        if not any(field in page_updates for field in valid_update_fields):
+            return JsonResponse(
+                {"message": "No valid fields to update"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their frontend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        frontend_id = user.get("frontend")
+        if not frontend_id:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            frontend_object_id = ObjectId(frontend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid frontend ID format"},
+                status=400
+            )
+            
+        # Get existing frontend info
+        frontend = frontend_collection.find_one({"_id": frontend_object_id})
+        if not frontend:
+            return JsonResponse(
+                {"warning": "Frontend configuration not found"},
+                status=404
+            )
+            
+        # Get existing folders
+        folders = frontend.get("folders", [])
+        
+        # Find the specified folder
+        folder_index = next((i for i, folder in enumerate(folders) if folder.get("id") == folder_id), None)
+        
+        if folder_index is None:
+            return JsonResponse(
+                {"warning": f"Folder with ID {folder_id} not found"},
+                status=404
+            )
+            
+        # Find the specified page
+        pages = folders[folder_index].get("pages", [])
+        page_index = next((i for i, page in enumerate(pages) if page.get("id") == page_id), None)
+        
+        if page_index is None:
+            return JsonResponse(
+                {"warning": f"Page with ID {page_id} not found in folder {folder_id}"},
+                status=404
+            )
+            
+        # Update only the provided fields
+        for field in valid_update_fields:
+            if field in page_updates:
+                pages[page_index][field] = page_updates[field]
+        
+        # Update the folder's pages
+        folders[folder_index]["pages"] = pages
+        
+        # Update the frontend document
+        result = frontend_collection.update_one(
+            {"_id": frontend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Page updated successfully"
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": True, "message": "No changes made to page"},
+                status=200
+            )
+    
+    except Exception as error:
+        print("Error editing page:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
     
 
 @csrf_exempt
@@ -587,6 +982,556 @@ def update_backend(request):
             status=500
         )
     
+
+
+"""
+Example request schema for add_new_folder_and_endpoint:
+{
+    "user_id": "{user_id}",
+    "folder_name": "Authentication",
+    "endpoint": {
+        "name": "Login",
+        "url": "https://api.example.com/login",
+        "method": "POST",
+        "schema": {
+            "username": "string",
+            "password": "string"
+        },
+        "description": "Authenticates a user and returns a token",
+        "examplePrompts": [],
+        "requiredContextParams": ["user_id"],
+        "instructions": "Send credentials to authenticate the user",
+        "num_hits": 0
+    }
+}
+"""
+@csrf_exempt
+def add_new_folder_and_endpoint(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_name = data.get("folder_name")
+        endpoint_data = data.get("endpoint")
+
+        # Validate required fields
+        if not all([user_id, folder_name, endpoint_data]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_name, and endpoint data"},
+                status=400
+            )
+
+        # Validate endpoint data has required fields
+        if not all(key in endpoint_data for key in ["name", "url", "method", "schema"]):
+            return JsonResponse(
+                {"message": "Endpoint data missing required fields: name, url, method, schema"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their backend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        backend_id = user.get("backend")
+        if not backend_id:
+            return JsonResponse(
+                {"warning": "Backend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            backend_object_id = ObjectId(backend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid backend ID format"},
+                status=400
+            )
+            
+        # Get existing backend info
+        backend = backend_collection.find_one({"_id": backend_object_id})
+        if not backend:
+            return JsonResponse(
+                {"warning": "Backend configuration not found"},
+                status=404
+            )
+            
+        # Generate a unique ID for the new folder
+        folder_id = f"folder_{uuid.uuid4().hex}"
+        
+        # Generate a unique ID for the new endpoint
+        endpoint_id = f"endpoint_{uuid.uuid4().hex}"
+        
+        # Create new folder with endpoint
+        new_folder = {
+            "id": folder_id,
+            "name": folder_name,
+            "endpoints": [{
+                "id": endpoint_id,
+                "name": endpoint_data["name"],
+                "url": endpoint_data["url"],
+                "method": endpoint_data["method"],
+                "schema": endpoint_data["schema"],
+                "description": endpoint_data.get("description", ""),
+                "params": endpoint_data.get("params", []),
+                "instructions": endpoint_data.get("instructions", ""),
+                "required_params": endpoint_data.get("required_params", []),
+                "num_bits": endpoint_data.get("num_bits", 1)
+            }]
+        }
+        
+        # Get existing folders or initialize empty array
+        folders = backend.get("folders", [])
+        
+        # Add the new folder
+        folders.append(new_folder)
+        
+        # Update the backend document
+        result = backend_collection.update_one(
+            {"_id": backend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Folder and endpoint added successfully",
+                "folder_id": folder_id,
+                "endpoint_id": endpoint_id
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": False, "message": "Failed to update backend"},
+                status=500
+            )
+    
+    except Exception as error:
+        print("Error adding folder and endpoint:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
+
+"""
+Example request schema for add_new_endpoint:
+{
+    "user_id": "6f7c232d307e0b2e1c17d27",
+    "folder_id": "folder_1743696478d81",
+    "endpoint": {
+        "name": "Login",
+        "url": "https://api.example.com/login",
+        "method": "POST",
+        "schema": {
+            "username": "string",
+            "password": "string"
+        },
+        "description": "Authenticates a user and returns a token",
+        "examplePrompts": [],
+        "requiredContextParams": ["user_id"],
+        "instructions": "Send credentials to authenticate the user",
+        "num_hits": 0
+    }
+}
+"""
+@csrf_exempt
+def add_new_endpoint(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_id = data.get("folder_id")
+        endpoint_data = data.get("endpoint")
+
+        # Validate required fields
+        if not all([user_id, folder_id, endpoint_data]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_id, and endpoint data"},
+                status=400
+            )
+
+        # Validate endpoint data has required fields
+        if not all(key in endpoint_data for key in ["name", "url", "method", "schema"]):
+            return JsonResponse(
+                {"message": "Endpoint data missing required fields: name, url, method, schema"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their backend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        backend_id = user.get("backend")
+        if not backend_id:
+            return JsonResponse(
+                {"warning": "Backend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            backend_object_id = ObjectId(backend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid backend ID format"},
+                status=400
+            )
+            
+        # Get existing backend info
+        backend = backend_collection.find_one({"_id": backend_object_id})
+        if not backend:
+            return JsonResponse(
+                {"warning": "Backend configuration not found"},
+                status=404
+            )
+            
+        # Get existing folders
+        folders = backend.get("folders", [])
+        
+        # Find the specified folder
+        folder_index = next((i for i, folder in enumerate(folders) if folder.get("id") == folder_id), None)
+        
+        if folder_index is None:
+            return JsonResponse(
+                {"warning": f"Folder with ID {folder_id} not found"},
+                status=404
+            )
+            
+        # Generate a unique ID for the new endpoint
+        endpoint_id = f"endpoint_{uuid.uuid4().hex}"
+        
+        # Create new endpoint
+        new_endpoint = {
+            "id": endpoint_id,
+            "name": endpoint_data["name"],
+            "url": endpoint_data["url"],
+            "method": endpoint_data["method"],
+            "schema": endpoint_data["schema"],
+            "description": endpoint_data.get("description", ""),
+            "params": endpoint_data.get("params", []),
+            "instructions": endpoint_data.get("instructions", ""),
+            "required_params": endpoint_data.get("required_params", []),
+            "num_bits": endpoint_data.get("num_bits", 1)
+        }
+        
+        # Get existing endpoints or initialize empty array
+        endpoints = folders[folder_index].get("endpoints", [])
+        
+        # Add the new endpoint
+        endpoints.append(new_endpoint)
+        
+        # Update the folder's endpoints
+        folders[folder_index]["endpoints"] = endpoints
+        
+        # Update the backend document
+        result = backend_collection.update_one(
+            {"_id": backend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Endpoint added successfully",
+                "endpoint_id": endpoint_id
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": False, "message": "Failed to update backend"},
+                status=500
+            )
+    
+    except Exception as error:
+        print("Error adding endpoint:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
+
+
+"""
+Example request schema for edit_endpoint:
+{
+    "user_id": "6f7c232d307e0b2e1c17d27",
+    "folder_id": "folder_1743696478d81",
+    "endpoint_id": "endpoint_1743694957289",
+    "endpoint_updates": {
+        "name": "Login",
+        "url": "https://api.example.com/login",
+        "method": "POST",
+        "schema": {
+            "username": "string",
+            "password": "string"
+        },
+        "description": "Authenticates a user and returns a token",
+        "examplePrompts": [],
+        "requiredContextParams": ["user_id"],
+        "instructions": "Send credentials to authenticate the user",
+        "num_hits": 0
+    }
+}
+"""
+
+
+@csrf_exempt
+def edit_endpoint(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_id = data.get("folder_id")
+        endpoint_id = data.get("endpoint_id")
+        endpoint_updates = data.get("endpoint_updates")
+
+        # Validate required fields
+        if not all([user_id, folder_id, endpoint_id, endpoint_updates]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_id, endpoint_id, and endpoint_updates"},
+                status=400
+            )
+
+        # Validate at least one field is being updated
+        valid_update_fields = ["name", "url", "method", "schema", "description", 
+                              "params", "instructions", "required_params", "num_bits"]
+        if not any(field in endpoint_updates for field in valid_update_fields):
+            return JsonResponse(
+                {"message": "No valid fields to update"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their backend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        backend_id = user.get("backend")
+        if not backend_id:
+            return JsonResponse(
+                {"warning": "Backend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            backend_object_id = ObjectId(backend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid backend ID format"},
+                status=400
+            )
+            
+        # Get existing backend info
+        backend = backend_collection.find_one({"_id": backend_object_id})
+        if not backend:
+            return JsonResponse(
+                {"warning": "Backend configuration not found"},
+                status=404
+            )
+            
+        # Get existing folders
+        folders = backend.get("folders", [])
+        
+        # Find the specified folder
+        folder_index = next((i for i, folder in enumerate(folders) if folder.get("id") == folder_id), None)
+        
+        if folder_index is None:
+            return JsonResponse(
+                {"warning": f"Folder with ID {folder_id} not found"},
+                status=404
+            )
+            
+        # Find the specified endpoint
+        endpoints = folders[folder_index].get("endpoints", [])
+        endpoint_index = next((i for i, endpoint in enumerate(endpoints) if endpoint.get("id") == endpoint_id), None)
+        
+        if endpoint_index is None:
+            return JsonResponse(
+                {"warning": f"Endpoint with ID {endpoint_id} not found in folder {folder_id}"},
+                status=404
+            )
+            
+        # Update only the provided fields
+        for field in valid_update_fields:
+            if field in endpoint_updates:
+                endpoints[endpoint_index][field] = endpoint_updates[field]
+        
+        # Update the folder's endpoints
+        folders[folder_index]["endpoints"] = endpoints
+        
+        # Update the backend document
+        result = backend_collection.update_one(
+            {"_id": backend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Endpoint updated successfully"
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": True, "message": "No changes made to endpoint"},
+                status=200
+            )
+    
+    except Exception as error:
+        print("Error editing endpoint:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
+
+"""
+Example request schema for delete_endpoint:
+{
+    "user_id": "6f7c232d307e0b2e1c17d27",
+    "folder_id": "folder_1743696478d81",
+    "endpoint_id": "endpoint_1743694957289"
+}
+"""
+@csrf_exempt
+def delete_endpoint(request):
+    try:
+        # Parse the incoming JSON request body
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        folder_id = data.get("folder_id")
+        endpoint_id = data.get("endpoint_id")
+
+        # Validate required fields
+        if not all([user_id, folder_id, endpoint_id]):
+            return JsonResponse(
+                {"message": "Missing required fields: user_id, folder_id, and endpoint_id"},
+                status=400
+            )
+
+        # Convert string ID to ObjectId for MongoDB query
+        try:
+            user_object_id = ObjectId(user_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid user ID format"},
+                status=400
+            )
+
+        # Find the user and their backend
+        user = users_collection.find_one({"_id": user_object_id})
+        if not user:
+            return JsonResponse(
+                {"warning": "User not found"},
+                status=404
+            )
+            
+        backend_id = user.get("backend")
+        if not backend_id:
+            return JsonResponse(
+                {"warning": "Backend configuration not found for this user"},
+                status=404
+            )
+            
+        try:
+            backend_object_id = ObjectId(backend_id)
+        except:
+            return JsonResponse(
+                {"message": "Invalid backend ID format"},
+                status=400
+            )
+            
+        # Get existing backend info
+        backend = backend_collection.find_one({"_id": backend_object_id})
+        if not backend:
+            return JsonResponse(
+                {"warning": "Backend configuration not found"},
+                status=404
+            )
+            
+        # Get existing folders
+        folders = backend.get("folders", [])
+        
+        # Find the specified folder
+        folder_index = next((i for i, folder in enumerate(folders) if folder.get("id") == folder_id), None)
+        
+        if folder_index is None:
+            return JsonResponse(
+                {"warning": f"Folder with ID {folder_id} not found"},
+                status=404
+            )
+            
+        # Find and remove the specified endpoint
+        endpoints = folders[folder_index].get("endpoints", [])
+        filtered_endpoints = [endpoint for endpoint in endpoints if endpoint.get("id") != endpoint_id]
+        
+        if len(filtered_endpoints) == len(endpoints):
+            return JsonResponse(
+                {"warning": f"Endpoint with ID {endpoint_id} not found in folder {folder_id}"},
+                status=404
+            )
+            
+        # Update the folder's endpoints
+        folders[folder_index]["endpoints"] = filtered_endpoints
+        
+        # Update the backend document
+        result = backend_collection.update_one(
+            {"_id": backend_object_id},
+            {"$set": {"folders": folders}}
+        )
+        
+        if result.modified_count > 0:
+            return JsonResponse({
+                "success": True, 
+                "message": "Endpoint deleted successfully"
+            }, status=200)
+        else:
+            return JsonResponse(
+                {"success": False, "message": "Failed to delete endpoint"},
+                status=500
+            )
+    
+    except Exception as error:
+        print("Error deleting endpoint:", error)
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
 
 @csrf_exempt
 def backend_details(request):
