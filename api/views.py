@@ -500,11 +500,12 @@ def add_new_folder_and_page(request):
         new_folder = {
             "id": folder_id,
             "name": folder_name,
-            "pages": [{
+            "endpoints": [{
                 "id": page_id,
                 "name": page_data["name"],
                 "url": page_data["url"],
-                "description": page_data["description"]
+                "description": page_data["description"],
+                "num_hits": 0
             }]
         }
         
@@ -637,11 +638,12 @@ def add_new_page(request):
             "id": page_id,
             "name": page_data["name"],
             "url": page_data["url"],
-            "description": page_data["description"]
+            "description": page_data["description"],
+            "num_hits": 0
         }
         
         # Get existing pages or initialize empty array
-        pages = folders[folder_index].get("pages", [])
+        pages = folders[folder_index].get("endpoints", [])
         
         # Add the new page
         pages.append(new_page)
@@ -766,7 +768,7 @@ def edit_page(request):
             )
             
         # Find the specified page
-        pages = folders[folder_index].get("pages", [])
+        pages = folders[folder_index].get("endpoints", [])
         page_index = next((i for i, page in enumerate(pages) if page.get("id") == page_id), None)
         
         if page_index is None:
