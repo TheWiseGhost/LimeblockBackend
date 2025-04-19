@@ -1702,12 +1702,12 @@ class EndpointAgent:
             # Create prompt templates
             self.endpoint_selection_prompt = PromptTemplate(
                 template="""
-                I want to {user_prompt} by hitting one the following endpoints with context {user_context}. 
+                I want to {user_prompt} by hitting one the following endpoints. 
                 
                 Available Endpoints:
                 {endpoints_json}
                 
-                If an endpoint matches my request and I have the context params for that endpoint, tell me that's the endpoint I should hit. Don't send me an endpoint if none match or I don't have enough context params, (don't give an endpoint to hit if you aren't sure it fits my needs). 
+                If an endpoint matches my request, tell me that's the endpoint I should hit. 
                 
                 {format_instructions}
                 
@@ -1753,8 +1753,8 @@ class EndpointAgent:
                 template="""
                 Prompt: {user_prompt}
 
-                Give a message that responds to this given as a member of company {company_name}. If you don't know what to respond give a message that 
-                tells the user to check the docs or contact support or etc depending on the prompt. Make the message short and to the point. 
+                Give a message that responds to this as a member of company {company_name}. If you don't know what to respond give a message that 
+                tells the user to check the docs or contact support or etc depending on the prompt. Make the message short and to the point. Don't make anything up.
                 """,
                 input_variables=["company_name", "user_prompt"]
             )
@@ -1908,7 +1908,6 @@ class EndpointAgent:
                 "prompt": prompt,
                 "formatted_response": f"Please confirm this action to endpoint - {best_endpoint.get('name', '')}.\nIf you don't think this endpoint makes sense, the AI might have made a mistake. Actions may be irreversible.",
                 "confirm_needed": True,
-
             }
         
     
@@ -2042,9 +2041,7 @@ class EndpointAgent:
             "name": ep.get("name", ""),
             "description": ep.get("description", ""),
             "example_prompts": ep.get("examplePrompts", ""),
-            "required_context_params": ep.get("requiredContextParams", ""),
-            "url": ep.get("url", ""),
-            "type": ep.get("endpoint_type", "backend")  # Include the type
+            "type": ep.get("endpoint_type", "backend")
         } for ep in endpoints], indent=2)
         
         # Create a chain for endpoint selection
