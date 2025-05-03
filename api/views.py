@@ -41,6 +41,7 @@ def create_user(request):
         print(emails)
         business_name = data.get("business_name")
         password = data.get("password")
+        code = data.get("code", " ")
 
         # Validate the request data
         if not business_name or not password or not emails or len(emails) == 0:
@@ -98,6 +99,15 @@ def create_user(request):
             backend_result = backend_collection.insert_one(backend)
 
             users_collection.update_one({"_id": result.inserted_id}, {"$set": {"frontend": str(frontend_result.inserted_id), "backend": str(backend_result.inserted_id)}})
+
+            if code == settings.BUSINESS_PROMO_CODE:
+                # Update the user's plan in the database
+                users_collection.update_one(
+                    {'_id': result.inserted_id}, 
+                    {'$set': {'plan': 'business', 'last_paid': datetime.datetime.today()}}
+                )
+                print(f"Updated user {str(result.inserted_id)} to business plan")
+
 
         if result.inserted_id:
             return JsonResponse(
