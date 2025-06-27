@@ -2498,7 +2498,7 @@ def are_maus_remaining(request):
 
         last_paid = user.get("last_paid")
 
-        if not last_paid and not last_paid >= time_threshold:
+        if last_paid and last_paid < time_threshold:
             # Update plan to 'free' in MongoDB
             users_collection.update_one(
                 {"api_key": api_key},
