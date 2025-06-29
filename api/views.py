@@ -1713,16 +1713,19 @@ class EndpointAgent:
                 Example Schema:
                 {schema_json}  
                
-                I want you to {user_prompt}, so change the schema json to fit what I am trying to do. Here is some context: {user_context}
+                User Prompt: {user_prompt}
+                Here is some context: {user_context}
+
                 Return a valid JSON object and nothing else. This schema is going to be sent to an endpoint called {endpoint_name} and it's described as {endpoint_description}.
                 The instructions are {endpoint_instructions}
+
+                If prompt doesn't apply to the schema properly or doesn't fit the endpoint or isn't specific on what to do, please just message me back "No action", if not
+                do the steps below:
 
                 Fill in values surrounded by curly braces in schema like "user_id": "{{user_id}}" with things in the
                 context I gave you. 
 
                 Don't modify the structure of the schema, just change the values so it matches what I'm trying to do. 
-
-                If you can't do this because the prompt doesn't apply to the schema properly, please just message me back "I need this ---"
                 """,
                 input_variables=["endpoint_name", "endpoint_description", "endpoint_instructions", "schema_json", "user_prompt", "user_context"]
             )
