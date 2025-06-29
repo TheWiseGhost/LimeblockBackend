@@ -68,9 +68,9 @@ def create_user(request):
             "password": password,
             "emails": emails,
             "created_at": datetime.datetime.today(),
-            "plan": "free",
+            "tokens": 250000,
             "api_key": api_key,
-            "mau_tracking": {},
+            "token_tracking": {},
         }
 
         # Insert the user into the Users collection
@@ -99,14 +99,6 @@ def create_user(request):
             backend_result = backend_collection.insert_one(backend)
 
             users_collection.update_one({"_id": result.inserted_id}, {"$set": {"frontend": str(frontend_result.inserted_id), "backend": str(backend_result.inserted_id)}})
-
-            if code == settings.BUSINESS_PROMO_CODE:
-                # Update the user's plan in the database
-                users_collection.update_one(
-                    {'_id': result.inserted_id}, 
-                    {'$set': {'plan': 'business', 'last_paid': datetime.datetime.today()}}
-                )
-                print(f"Updated user {str(result.inserted_id)} to business plan")
 
 
         if result.inserted_id:
@@ -194,18 +186,6 @@ def user_details(request):
         if user:
             # Convert ObjectId to string for JSON serialization
             user['_id'] = str(user['_id'])
-
-            last_paid = user.get("last_paid")
-        
-            # Define the time threshold (1.5 months ago)
-            time_threshold = datetime.datetime.today() - timedelta(days=45)
-
-            if last_paid and last_paid < time_threshold:
-                users_collection.update_one(
-                    {"_id": object_id},
-                    {"$set": {"plan": "free"}}
-                )
-                user['plan'] = "free"  # Reflect this in the response
             
             
             # Return user details (excluding password)
@@ -221,6 +201,7 @@ def user_details(request):
                     "backend": user.get('backend'),
                     "api_key": user.get('api_key'),
                     "last_paid": user.get('last_paid').isoformat() if user.get('last_paid') else None,
+                    "tokens": user.get('tokens', 0),
                 }
             }, status=200)
         else:
@@ -1741,7 +1722,7 @@ class EndpointAgent:
 
                 Don't modify the structure of the schema, just change the values so it matches what I'm trying to do. 
 
-                If you don't think you can do this because you need more context from me or more instructions to fill the schema, please just message me back "I need this ---"
+                If you can't do this because the prompt doesn't apply to the schema properly, please just message me back "I need this ---"
                 """,
                 input_variables=["endpoint_name", "endpoint_description", "endpoint_instructions", "schema_json", "user_prompt", "user_context"]
             )
@@ -1753,7 +1734,7 @@ class EndpointAgent:
 
                 Response from server: {server_response}
 
-                Give a message that sums this up without any URL links just the URL text itself if needed and make it short and to the point and 
+                Give a message that sums this up and make it short and to the point and 
                 have nothing about the endpoint used or its name or what was done to process the user's request. just give the useful info the user needs.
                 """,
                 input_variables=["endpoint_name", "endpoint_description", "server_response", "user_prompt"]
@@ -2151,9 +2132,6 @@ class EndpointAgent:
                 user_context=context_json
             ))
 
-            if isinstance(result, str):
-                return result
-
             # Extract JSON from response
             try:
                 json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result.content, re.DOTALL)
@@ -2163,24 +2141,24 @@ class EndpointAgent:
                 filled_schema = self.replace_context_placeholders(filled_schema, context)
                 return filled_schema
             except json.JSONDecodeError:
-                logging.warning("Failed to parse LLM response as JSON, using example schema")
-                return schema_dict
+                logging.warning("Failed to parse LLM response as JSON -> AI can't do this")
+                return "AI can't do this"
 
         except Exception as e:
             logging.error(f"Error in schema filling: {str(e)}")
-            return schema_dict
+            return "AI can't do this"
             
     
     def _simple_fill_from_example(self, prompt: str, schema_dict: Dict) -> Dict:
         """
         Use the schema as-is since it's already an example
         """
-        return schema_dict
+        return "AI can't do this"  # Placeholder for when LLM is not available
     
     def _send_request(self, endpoint: Dict, data: Dict) -> Dict:
-        # Only execute for backend endpoints
-        if endpoint.get("endpoint_type") == "frontend":
-            return {"error": "Cannot execute frontend endpoints"}
+        # # Only execute for backend endpoints
+        # if endpoint.get("endpoint_type") == "frontend":
+        #     return {"error": "Cannot execute frontend endpoints"}
             
         url = endpoint.get("url", "")
         logging.info(f"Sending request to: {url}")
@@ -2336,6 +2314,361 @@ def commit_backend_action(request):
             {"message": "Internal Server Error", "error": str(error)},
             status=500
         )
+    
+
+
+
+@csrf_exempt
+def ai_action(request):
+    try:
+        data = json.loads(request.body)
+        context = data.get("context", {})
+        endpoint_id = data.get("endpoint_id")
+        folder_id = data.get("folder_id")
+        prompt = data.get("prompt")
+        api_key = data.get("api_key")
+        formatting_needed = data.get("formatting_needed", False)
+        
+        if not are_tokens_remaining(api_key):
+            return JsonResponse(
+                {"response": "This company has reached the monthly token limit. Upgrade needed to continue using Limeblock."},
+                status=403
+            )
+        
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.error("User not found.")
+            return {"error": "User not found", "status": 404}
+
+        logging.debug(f"User found: {user}")
+
+        # Step 2: Get backend and frontend document IDs
+        backend_id = user.get("backend")
+
+        # Find the specific endpoint from the backend collection
+        backend_doc = backend_collection.find_one({"_id": ObjectId(backend_id)})
+        if not backend_doc:
+            logging.error("Backend document not found.")
+            return JsonResponse({"error": "Backend not found", "status": 404}, status=404)
+
+        endpoint = None
+        for folder in backend_doc.get("folders", []):
+            if folder.get("id") == folder_id:
+                for e in folder.get("endpoints", []):
+                    if e.get("id") == endpoint_id:
+                        endpoint = e
+                        break
+                break
+
+        if not endpoint:
+            logging.error(f"Endpoint not found with folder_id: {folder_id}, endpoint_id: {endpoint_id}")
+            return JsonResponse({"error": "Endpoint not found", "status": 404}, status=404)
+
+        # Initialize the agent
+        agent = EndpointAgent(
+            users_collection=users_collection,
+            backend_collection=backend_collection,
+            frontend_collection=frontend_collection,
+            deepseek_api_key=f'{settings.DEEPSEEK_API_KEY}',
+        )
+
+        schema = agent._fill_schema(prompt, endpoint, context)
+        print("FILLED_SCHEMA: " + str(schema))
+        prompt_tokens = count_tokens(prompt)
+        context_tokens = count_tokens(json.dumps(context))
+        endpoint_tokens = count_tokens(json.dumps(endpoint))  # Add endpoint tokens
+        input_tokens = prompt_tokens + context_tokens + endpoint_tokens
+        
+        # Count output tokens from the schema generation
+        output_tokens = count_tokens(str(schema))
+
+        # 88 is just the tokens we use in the prompt
+        total_tokens = input_tokens + output_tokens * 4 + 88
+
+        if isinstance(schema, str):
+            print("TOTAL TOKENS USED: " + str(total_tokens))
+            update_token_count(api_key, total_tokens)
+            return JsonResponse({"response": schema, "status": 200})
+
+        response = agent._send_request(endpoint, schema)
+        logging.debug(f"Response from backend: {response}")
+        
+        # If formatting is needed, count those tokens too
+        if formatting_needed:
+            # Include endpoint name and description in formatting token count
+            endpoint_name = endpoint.get("name", "")
+            endpoint_description = endpoint.get("description", "")
+            
+            formatted_response = agent.llm.invoke(agent.response_creation_prompt.format(
+                endpoint_name=endpoint_name,
+                endpoint_description=endpoint_description,
+                user_prompt=prompt,
+                server_response=response
+            ))
+            formatted_content = str(formatted_response.content)
+            
+            # Count formatting input tokens (endpoint name + description + prompt + response)
+            formatting_input_tokens = (count_tokens(endpoint_name) + 
+                                     count_tokens(endpoint_description) + 
+                                     count_tokens(prompt) + 
+                                     count_tokens(str(response)))
+            # Count formatting output tokens
+            formatting_output_tokens = count_tokens(formatted_content)
+            # 60 tokens used in prompt
+            formatting_tokens = formatting_input_tokens + formatting_output_tokens * 4 + 50
+            total_tokens += formatting_tokens
+        else:
+            formatted_content = None
+            formatting_tokens = 0
+
+
+        backend_collection.update_one(
+            {"_id": ObjectId(backend_id), "folders.id": folder_id, "folders.endpoints.id": endpoint_id},
+            {"$inc": {"folders.$[folder].endpoints.$[endpoint].num_hits": 1}},
+            array_filters=[
+                {"folder.id": folder_id},
+                {"endpoint.id": endpoint_id}
+            ]
+        )  
+        
+        print("TOTAL TOKENS USED: " + str(total_tokens))
+        # Update token count with total tokens used
+        update_token_count(api_key, total_tokens)
+        
+        if formatting_needed:
+            result = {
+                "status": 200,
+                "endpoint_type": "completed_backend",
+                "endpoint_used": endpoint.get("name", "Unknown endpoint"),
+                "request_data": schema,
+                "response": response, 
+                "formatted_response": formatted_content,
+            }
+        else:
+            result = {
+                "status": 200,
+                "endpoint_type": "completed_backend",
+                "endpoint_used": endpoint.get("name", "Unknown endpoint"),
+                "request_data": schema,
+                "response": response,
+            }
+        
+        # Ensure we return 200 status even if no endpoint is found
+        if "status" in result and result["status"] != 200:
+            result_status = result.pop("status", 200)
+            return JsonResponse(result, status=result_status)
+        else:
+            return JsonResponse(result, status=200)
+    except Exception as error:
+        logging.error("ai_action error: " + traceback.format_exc())
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+    
+
+
+import tiktoken  # For token counting
+from deepseek_tokenizer import ds_token
+
+def count_tokens(text):
+    try:
+        # encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        # return len(encoding.encode(text))
+        return len(ds_token.encode(str(text)))
+    except:
+        print("Error counting tokens with tiktoken, falling back to approximate method.")
+        # Fallback: approximate token count (1 token ≈ 4 characters)
+        return max(1, len(text) // 4)
+
+def update_token_count(api_key, token_count):
+    """
+    Updates the token balance by deducting the used tokens.
+    Ensures balance never goes below 0.
+    
+    Args:
+        api_key: API key
+        token_count: Number of tokens to deduct
+    
+    Returns:
+        dict: {'success': bool, 'new_balance': int, 'tokens_deducted': int}
+    """
+    try:
+        # Find the user document by API key
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.warning(f"No user found with API key: {api_key}")
+            return {'success': False, 'new_balance': 0, 'tokens_deducted': 0}
+        
+        # Get current token balance (default to 0 if not set)
+        current_balance = user.get("tokens", 0)
+        
+        # Calculate how many tokens to actually deduct
+        # If they have 10 tokens and try to use 207, deduct all 10
+        tokens_to_deduct = min(current_balance, token_count)
+        new_balance = max(0, current_balance - token_count)
+        
+        # Update the token balance
+        users_collection.update_one(
+            {"api_key": api_key},
+            {"$set": {"tokens": new_balance}}
+        )
+        
+        # Still track usage for analytics (optional - keep monthly tracking for stats)
+        current_month = datetime.datetime.now().strftime("%Y-%m")
+        users_collection.update_one(
+            {"api_key": api_key},
+            {"$inc": {f"token_tracking.{current_month}": token_count}}
+        )
+        
+        return {
+            'success': True, 
+            'new_balance': new_balance, 
+            'tokens_deducted': tokens_to_deduct,
+            'tokens_requested': token_count
+        }
+        
+    except Exception as e:
+        logging.error(f"Error updating token balance: {traceback.format_exc()}")
+        return {'success': False, 'new_balance': 0, 'tokens_deducted': 0}
+
+
+def add_tokens_to_balance(api_key, tokens_to_add):
+    """
+    Adds tokens to a user's balance (for purchases).
+    
+    Args:
+        api_key: API key
+        tokens_to_add: Number of tokens to add to balance
+    
+    Returns:
+        dict: {'success': bool, 'new_balance': int}
+    """
+    try:
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.warning(f"No user found with API key: {api_key}")
+            return {'success': False, 'new_balance': 0}
+        
+        current_balance = user.get("tokens", 0)
+        new_balance = current_balance + tokens_to_add
+        
+        users_collection.update_one(
+            {"api_key": api_key},
+            {"$set": {"tokens": new_balance}}
+        )
+        
+        return {'success': True, 'new_balance': new_balance}
+        
+    except Exception as e:
+        logging.error(f"Error adding tokens to balance: {traceback.format_exc()}")
+        return {'success': False, 'new_balance': 0}
+
+
+@csrf_exempt
+def get_token_stats(request):
+    """
+    Get token statistics for a specific user over a number of months.
+    
+    Args:
+        users_collection: MongoDB collection containing user data
+        user_id: User ID
+        months: Number of months to include in the statistics (default 6)
+    
+    Returns:
+        dict: Monthly token statistics
+    """
+    try:
+        data = json.loads(request.body)
+        user_id = data.get("user_id")
+        months = data.get("months", 6)
+
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user or "token_tracking" not in user:
+            return JsonResponse({"error": "No token data found"}, status=404)
+        
+        current_balance = user.get("tokens", 0)
+        
+        # Get the current month and previous months
+        current_date = datetime.datetime.now()
+        month_stats = {}
+
+        for i in range(months):
+            month_date = current_date.replace(day=1) - relativedelta(months=i)
+            month_key = month_date.strftime("%Y-%m")
+            
+            # Get token count for this month
+            month_stats[month_key] = user.get("token_tracking", {}).get(month_key, 0)
+
+        return JsonResponse(
+            {"success": True, "remaining": current_balance, "usage_stats": month_stats},
+            status=200
+        )
+
+    except Exception as error:
+        return JsonResponse(
+            {"message": "Internal Server Error", "error": str(error)},
+            status=500
+        )
+
+def are_tokens_remaining(api_key, estimated_token_usage=0):
+    """
+    Check if user has sufficient tokens in their balance.
+    
+    Args:
+        api_key: User's API key
+        estimated_token_usage: Estimated tokens for the current request (optional)
+    
+    Returns:
+        dict: {'has_tokens': bool, 'current_balance': int, 'estimated_usage': int}
+    """
+    try:
+        if not api_key:
+            return {'has_tokens': False, 'current_balance': 0, 'estimated_usage': estimated_token_usage}
+        
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            logging.error("User not found in token check.")
+            return {'has_tokens': False, 'current_balance': 0, 'estimated_usage': estimated_token_usage}
+        
+        current_balance = user.get("tokens", 0)
+        
+        # Check if user has any tokens (they can use more than they have, balance just goes to 0)
+        has_tokens = current_balance > 0
+        
+        return {
+            'has_tokens': has_tokens, 
+            'current_balance': current_balance, 
+            'estimated_usage': estimated_token_usage
+        }
+        
+    except Exception as error:
+        logging.error("Token check error: " + traceback.format_exc())
+        return {'has_tokens': False, 'current_balance': 0, 'estimated_usage': estimated_token_usage}
+
+def get_user_token_balance(api_key):
+    """
+    Get the current token balance for a user.
+    
+    Args:
+        api_key: User's API key
+    
+    Returns:
+        int: Current token balance (0 if user not found)
+    """
+    try:
+        if not api_key:
+            return 0
+            
+        user = users_collection.find_one({"api_key": api_key})
+        if not user:
+            return 0
+            
+        return user.get("tokens", 0)
+        
+    except Exception as error:
+        logging.error(f"Error getting user token balance: {traceback.format_exc()}")
+        return 0
 
 
 def update_mau(api_key, client_info):
@@ -2609,7 +2942,6 @@ def test_endpoint(request):
         }, status=500)
 
 
-
 # STRIPE CHECKOUT STUFF
 
 # Set Stripe API key
@@ -2621,7 +2953,7 @@ WEBHOOK_SECRET = settings.STRIPE_WEBHOOK_SECRET
 @csrf_exempt
 def create_checkout_session(request):
     """
-    Creates a Stripe Checkout Session for recurring monthly payments.
+    Creates a Stripe Checkout Session for one-time token purchases.
     """
     if request.method == "POST":
         try:
@@ -2641,17 +2973,15 @@ def create_checkout_session(request):
             # Get existing Stripe customer ID if available
             stripe_customer_id = user.get('stripe_customer_id')
             
-            # Product price mapping for recurring subscriptions
+            # Product price mapping for one-time token purchases
             product_to_price_mapping = {
-                "prod_RzHMsNHXCLy0o6": "price_1R5IoACZciU921ANPdW464Lu",
-                "prod_RzHNbu0fjuTZlu": "price_1R80saCZciU921ANSS7Qt3my",
-                "prod_S3HJuA15K2CkU6": "price_1R9AkkCZciU921ANZ7a4fCGl"
+                "prod_SaalN81LV6nSbe": "price_1RfPZWCZciU921ANhPuM3x1M",  # $5 for 1M tokens
             }
 
             if product_id not in product_to_price_mapping:
                 return JsonResponse({"error": "Invalid Product ID"}, status=400)
 
-            # Session parameters
+            # Session parameters for one-time payment
             session_params = {
                 "payment_method_types": ["card"],
                 "line_items": [
@@ -2660,18 +2990,12 @@ def create_checkout_session(request):
                         "quantity": 1,
                     }
                 ],
-                "mode": "subscription",  # Recurring subscription mode
-                "success_url": "https://limeblock.io/dashboard",
-                "cancel_url": "https://limeblock.io/dashboard",
+                "mode": "payment",  # One-time payment mode (not subscription)
+                "success_url": "https://limeblock.io/dashboard?payment=success",
+                "cancel_url": "https://limeblock.io/dashboard?payment=cancelled",
                 "metadata": {
                     "user_id": user_id,  # Attach user ID as metadata
                     "product_id": product_id,  # Attach product ID as metadata
-                },
-                "subscription_data": {
-                    "metadata": {
-                        "user_id": user_id,
-                        "product_id": product_id,
-                    }
                 }
             }
             
@@ -2704,24 +3028,21 @@ def stripe_webhook(request):
         # Signature doesn't match
         return JsonResponse({'error': 'Invalid signature'}, status=400)
 
-    # Handle checkout.session.completed
+    # Handle checkout.session.completed for one-time payments
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         handle_checkout_session(session)
-    # Handle subscription events
-    elif event["type"] == "invoice.paid":
-        invoice = event["data"]["object"]
-        handle_invoice_paid(invoice)
-    elif event["type"] == "customer.subscription.created":
-        subscription = event["data"]["object"]
-        handle_subscription_created(subscription)
+    # Handle payment_intent.succeeded as backup
+    elif event["type"] == "payment_intent.succeeded":
+        payment_intent = event["data"]["object"]
+        handle_payment_succeeded(payment_intent)
 
     return JsonResponse({"status": "success"}, status=200)
 
 
 def handle_checkout_session(session):
     """
-    Processes the checkout session.
+    Processes the checkout session for token purchases.
     """
     # Extract metadata from session
     user_id = session["metadata"].get("user_id")
@@ -2731,7 +3052,7 @@ def handle_checkout_session(session):
         print("Missing required metadata in checkout session")
         return
 
-    print(f"User {user_id} initiated checkout for product {product_id}")
+    print(f"User {user_id} completed checkout for product {product_id}")
     
     try:
         # Get the user
@@ -2765,96 +3086,78 @@ def handle_checkout_session(session):
                 {'$set': {'stripe_customer_id': stripe_customer_id}}
             )
             print(f"Created Stripe customer {stripe_customer_id} for user {user_id}")
+        
+        # Credit tokens to user account
+        credit_tokens_to_user(user_id, product_id)
     
     except Exception as e:
         print(f"Error processing checkout session: {e}")
 
 
-def handle_invoice_paid(invoice):
+def handle_payment_succeeded(payment_intent):
     """
-    Processes the invoice paid event.
+    Handles payment_intent.succeeded event as a backup.
     """
-    subscription_id = invoice.get('subscription')
-    if not subscription_id:
-        print("No subscription found in invoice")
-        return
-    
     try:
-        # Get the subscription to access metadata
-        subscription = stripe.Subscription.retrieve(subscription_id)
-        
-        # Get metadata from the subscription
-        user_id = subscription.metadata.get('user_id')
-        product_id = subscription.metadata.get('product_id')
+        # Get metadata from payment intent
+        user_id = payment_intent["metadata"].get("user_id")
+        product_id = payment_intent["metadata"].get("product_id")
         
         if not user_id or not product_id:
-            print("Missing required metadata in subscription")
+            print("Missing required metadata in payment intent")
+            return
+        
+        print(f"Payment succeeded for user {user_id}, product {product_id}")
+        credit_tokens_to_user(user_id, product_id)
+        
+    except Exception as e:
+        print(f"Error handling payment succeeded: {e}")
+
+
+def credit_tokens_to_user(user_id, product_id):
+    """
+    Credits tokens to user's account based on the product purchased.
+    """
+    print(f"Crediting tokens for user {user_id} for product {product_id}")
+    
+    try:
+        # Define token amounts for each product
+        product_to_tokens = {
+            "prod_SaalN81LV6nSbe": 1000000,  # 1 million tokens for $5
+        }
+        
+        if product_id not in product_to_tokens:
+            print(f"Unknown product ID: {product_id}")
             return
             
-        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        tokens_to_add = product_to_tokens[product_id]
         
+        # Get current user token balance
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
         if not user:
             print(f"User not found: {user_id}")
             return
             
-        update_user_plan(user_id, product_id)
+        current_balance = user.get('tokens', 0)
+        new_balance = current_balance + tokens_to_add
         
-    except Exception as e:
-        print(f"Error handling invoice paid: {e}")
-
-
-def handle_subscription_created(subscription):
-    """
-    Handles the subscription.created event.
-    """
-    user_id = subscription.metadata.get('user_id')
-    customer_id = subscription.customer
-    
-    if not user_id or not customer_id:
-        print("Missing required data in subscription")
-        return
-    
-    try:
-        # Cancel old subscriptions for this user
-        customer = stripe.Customer.retrieve(customer_id)
-        subscriptions = stripe.Subscription.list(customer=customer_id, status='active')
-        
-        new_subscription_id = subscription.id
-        
-        for sub in subscriptions.auto_paging_iter():
-            # Don't cancel the newly created subscription
-            if sub.id != new_subscription_id:
-                stripe.Subscription.delete(sub.id)
-                print(f"Cancelled old subscription {sub.id} for user {user_id}")
-                
-    except Exception as e:
-        print(f"Error cancelling old subscriptions: {e}")
-
-
-def update_user_plan(user_id, product_id):
-    """
-    Updates the user's plan in the database.
-    """
-    print(f"Updating plan for user {user_id} to product {product_id}")
-    
-    try:
-        plan_type = None
-        if product_id == "prod_RzHMsNHXCLy0o6":
-            plan_type = "startup"
-        elif product_id == "prod_RzHNbu0fjuTZlu":
-            plan_type = "business"
-        elif product_id == "prod_S551gYSiT7y2BK":
-            plan_type = "enterprise"
-        else:
-            print(f"Unknown product ID: {product_id}")
-            return
-            
-        # Update the user's plan in the database
-        users_collection.update_one(
+        # Update the user's token balance in the database
+        result = users_collection.update_one(
             {'_id': ObjectId(user_id)}, 
-            {'$set': {'plan': plan_type, 'last_paid': datetime.datetime.today()}}
+            {
+                '$set': {
+                    'tokens': new_balance,
+                    'last_paid': datetime.datetime.now()
+                },
+            }
         )
-        print(f"Updated user {user_id} to {plan_type} plan")
+        
+        if result.modified_count > 0:
+            print(f"Successfully credited {tokens_to_add:,} tokens to user {user_id}")
+            print(f"User balance: {current_balance:,} -> {new_balance:,} tokens")          
+        else:
+            print(f"Failed to update token balance for user {user_id}")
         
     except Exception as e:
-        print(f"Failed to update user plan: {e}")
+        print(f"Failed to credit tokens to user: {e}")
+        print(traceback.format_exc())
