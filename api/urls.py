@@ -3,7 +3,7 @@ from .views import main, create_user, sign_in, user_details, update_frontend, fr
 from .views import create_checkout_session, stripe_webhook, update_emails, get_mau_stats, commit_backend_action, are_maus_remaining, test_endpoint
 from .views import add_new_folder_and_endpoint, add_new_endpoint, edit_endpoint, delete_endpoint
 from .views import add_new_folder_and_page, add_new_page, edit_page
-from .views import ai_action, get_token_stats
+from .views import ai_action, get_token_stats, new_idea
 
 urlpatterns = [
     path('', main, name='main'),
@@ -32,4 +32,5 @@ urlpatterns = [
     path('are_maus_remaining/', are_maus_remaining, name="are_maus_remaining"),
     path('ai_action/', ai_action, name='ai_action'),
     path('get_token_stats/', get_token_stats, name='get_token_stats'),
+    path('new_idea', new_idea, name='new_idea')
 ]

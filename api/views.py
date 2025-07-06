@@ -3164,3 +3164,46 @@ def credit_tokens_to_user(user_id, product_id):
     except Exception as e:
         print(f"Failed to credit tokens to user: {e}")
         print(traceback.format_exc())
+
+
+@csrf_exempt
+def new_idea(request):
+    try:
+        # Get the MongoDB collection
+        new_idea_collection = db['NewIdea']
+        
+        # Parse the JSON data from the request
+        data = json.loads(request.body)
+        
+        # Create the document to insert
+        document = {
+            'message': data.get('message', ''),
+            'email': data.get('email', ''),
+            'budget': data.get('budget', ''),
+            'companyUrl': data.get('companyUrl', ''),
+            'created_at': datetime.datetime.now(),
+            'processed': False,
+            'status': 'pending'
+        }
+        
+        # Insert the document into MongoDB
+        result = new_idea_collection.insert_one(document)
+        
+        # Return success response
+        return JsonResponse({
+            'success': True,
+            'message': 'Idea submitted successfully',
+            'id': str(result.inserted_id)
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'error': 'Invalid JSON data'
+        }, status=400)
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
